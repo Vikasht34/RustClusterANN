@@ -20,7 +20,7 @@ cd rustsptag
 
 # Build release binaries
 echo "Building release binaries..."
-cargo build --release
+cargo build --release --bin bench_sift_storage --bin bench_cohere1m
 
 # Create output directories
 mkdir -p /data/results/sift

@@ -3,25 +3,17 @@ name = "rustsptag"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "test_rabitq"
-path = "src/bin/test_rabitq.rs"
-
-[[bin]]
-name = "bench_sift"
-path = "src/bin/bench_sift.rs"
-
-[[bin]]
-name = "bench_cohere"
-path = "src/bin/bench_cohere.rs"
-
-[[bin]]
-name = "test_storage"
-path = "src/bin/test_storage.rs"
+[lib]
+name = "rustsptag"
+path = "src/lib.rs"
 
 [[bin]]
 name = "bench_sift_storage"
 path = "src/bin/bench_sift_storage.rs"
+
+[[bin]]
+name = "bench_cohere1m"
+path = "src/bin/bench_cohere1m.rs"
 
 [[bin]]
 name = "bench_sift_quant"
