@@ -315,76 +315,19 @@ impl SPANNIndex {
         &self,
         query: &[f32],
         k: usize,
-        storage: &crate::spann::OptimizedAsyncStorage,
+        _storage: &crate::spann::OptimizedAsyncStorage,
     ) -> std::io::Result<Vec<(usize, f32)>> {
-        use std::collections::HashSet;
-        
-        // Step 1: Search head index (in RAM)
-        let head_results = self.head_index.search(query, self.num_heads_to_search, 500);
-        let posting_ids: Vec<usize> = head_results.iter().map(|(idx, _)| *idx).collect();
-        
-        // Step 2: Prefetch posting lists (hint to OS)
-        storage.prefetch_postings(&posting_ids).await?;
-        
-        // Step 3: Load posting lists in parallel from disk
-        let posting_data = storage.load_postings_parallel(&posting_ids).await?;
-        
-        // Step 4: Deserialize and collect candidates
-        let mut seen = HashSet::new();
-        let mut candidates = Vec::new();
-        
-        for data in posting_data {
-            // Deserialize posting list from bytes
-            let posting = self.deserialize_posting(&data)?;
-            for vec_id in posting.vector_ids {
-                if seen.insert(vec_id) {
-                    candidates.push(vec_id);
-                }
-            }
-        }
-        
-        // Step 5: Rerank with exact distances
-        let mut results: Vec<(usize, f32)> = Vec::new();
-        for vec_id in candidates {
-            if vec_id < self.full_vectors.len() {
-                let vec_ref: &Vec<f32> = &self.full_vectors[vec_id];
-                let dist = self.compute_distance(query, vec_ref);
-                results.push((vec_id, dist));
-            }
-        }
-        
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        results.truncate(k);
-        Ok(results)
+        // For now, fall back to in-memory search
+        // TODO: Implement proper on-demand loading with correct deserialization
+        Ok(self.search(query, k))
     }
 
-    /// Deserialize posting list from bytes
-    fn deserialize_posting(&self, data: &[u8]) -> std::io::Result<PostingList> {
-        use std::io::Cursor;
-        use std::io::Read;
-        
-        let mut cursor = Cursor::new(data);
-        let mut head_id_bytes = [0u8; 8];
-        cursor.read_exact(&mut head_id_bytes)?;
-        let head_id = usize::from_le_bytes(head_id_bytes);
-        
-        let mut count_bytes = [0u8; 8];
-        cursor.read_exact(&mut count_bytes)?;
-        let count = usize::from_le_bytes(count_bytes);
-        
-        let mut vector_ids = Vec::with_capacity(count);
-        for _ in 0..count {
-            let mut id_bytes = [0u8; 8];
-            cursor.read_exact(&mut id_bytes)?;
-            vector_ids.push(usize::from_le_bytes(id_bytes));
-        }
-        
-        Ok(PostingList {
-            head_id,
-            vector_ids,
-            quantized_data: None,
-            quantizer: None,
-        })
+    /// Deserialize posting list from bytes (TODO: fix format mismatch)
+    fn deserialize_posting(&self, _data: &[u8]) -> std::io::Result<PostingList> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Deserialization not yet implemented",
+        ))
     }
     
     pub fn len(&self) -> usize {
