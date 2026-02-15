@@ -2,7 +2,7 @@
 set -e
 
 SIFT_DIR="/data/sift"
-OUTPUT_DIR="/nvme/results/sift"
+OUTPUT_DIR="/data/results/sift"
 INDEX_DIR="/nvme/indexes/sift"
 
 mkdir -p "$OUTPUT_DIR"
