@@ -10,7 +10,7 @@ use super::posting::PostingList;
 /// Optimized async storage with Direct I/O and parallel prefetch
 pub struct OptimizedAsyncStorage {
     path: String,
-    list_infos: Arc<Vec<ListInfo>>,
+    pub list_infos: Arc<Vec<ListInfo>>,
     enable_compression: bool,
     enable_direct_io: bool,
 }

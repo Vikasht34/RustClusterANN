@@ -39,14 +39,14 @@ impl PostingList {
 }
 
 pub struct SPANNIndex {
-    // Head index (in-memory SPTAG-BKT)
+    // Head index (in-memory SPTAG-BKT) - ALWAYS in memory
     head_index: SPTAGBKTIndex,
     head_id_map: Vec<usize>,  // Maps head_index position to original vector ID
     
-    // Posting lists
+    // Posting lists (empty in on-demand mode)
     postings: Vec<PostingList>,
     
-    // Full vectors (for reranking)
+    // Full vectors (empty in on-demand mode)
     full_vectors: Vec<Vec<f32>>,
     
     // Distance metric
@@ -68,6 +68,12 @@ pub struct SPANNIndex {
     // Storage metadata (for on-demand loading)
     list_infos: Vec<crate::spann::storage::ListInfo>,
     index_path: Option<String>,
+    
+    // On-demand mode flag
+    on_demand_mode: bool,
+    
+    // Dimension (needed for on-demand mode)
+    dim: usize,
 }
 
 
@@ -88,6 +94,8 @@ impl SPANNIndex {
             hbc_sample_size: Some(100_000), // Sample 100K for HBC (PlanetScale approach)
             list_infos: Vec::new(),
             index_path: None,
+            on_demand_mode: false,
+            dim: 0,
         }
     }
     
@@ -311,23 +319,87 @@ impl SPANNIndex {
 
     /// On-demand search: loads posting lists from disk as needed
     /// Only head index stays in RAM, posting lists loaded per query
+    /// On-demand search: loads posting lists + vectors from disk per query
+    /// Only head index stays in RAM
     pub async fn search_async(
         &self,
         query: &[f32],
         k: usize,
-        _storage: &crate::spann::OptimizedAsyncStorage,
+        storage: &crate::spann::OptimizedAsyncStorage,
     ) -> std::io::Result<Vec<(usize, f32)>> {
-        // For now, fall back to in-memory search
-        // TODO: Implement proper on-demand loading with correct deserialization
-        Ok(self.search(query, k))
-    }
-
-    /// Deserialize posting list from bytes (TODO: fix format mismatch)
-    fn deserialize_posting(&self, _data: &[u8]) -> std::io::Result<PostingList> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Deserialization not yet implemented",
-        ))
+        use std::collections::HashSet;
+        
+        // Step 1: Search head index (in RAM)
+        let head_results = self.head_index.search(query, self.num_heads_to_search, 500);
+        let posting_ids: Vec<usize> = head_results.iter().map(|(idx, _)| *idx).collect();
+        
+        // Step 2: Prefetch posting lists
+        storage.prefetch_postings(&posting_ids).await?;
+        
+        // Step 3: Load posting lists in parallel from disk
+        let posting_data = storage.load_postings_parallel(&posting_ids).await?;
+        
+        // Step 4: Parse posting lists and collect candidates with vectors
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        
+        for (posting_idx, data) in posting_data.iter().enumerate() {
+            let list_info = &storage.list_infos[posting_ids[posting_idx]];
+            let count = list_info.ele_count as usize;
+            
+            // Parse: [vec_id (u32), vec_id (u32), ..., vector data (f32)...]
+            let mut cursor = 0;
+            
+            // Read vector IDs (u32 each, no count prefix)
+            let mut vec_ids = Vec::with_capacity(count);
+            for _ in 0..count {
+                if cursor + 4 > data.len() {
+                    break;
+                }
+                let id = u32::from_le_bytes([
+                    data[cursor],
+                    data[cursor + 1],
+                    data[cursor + 2],
+                    data[cursor + 3],
+                ]) as usize;
+                vec_ids.push(id);
+                cursor += 4;
+            }
+            
+            // Read vectors (full precision f32)
+            for &vec_id in &vec_ids {
+                if !seen.insert(vec_id) {
+                    cursor += self.dim * 4;
+                    continue;
+                }
+                
+                if cursor + self.dim * 4 > data.len() {
+                    break;
+                }
+                
+                // Extract vector
+                let mut vec = Vec::with_capacity(self.dim);
+                for _ in 0..self.dim {
+                    let val = f32::from_le_bytes([
+                        data[cursor],
+                        data[cursor + 1],
+                        data[cursor + 2],
+                        data[cursor + 3],
+                    ]);
+                    vec.push(val);
+                    cursor += 4;
+                }
+                
+                // Compute distance
+                let dist = self.compute_distance(query, &vec);
+                candidates.push((vec_id, dist));
+            }
+        }
+        
+        // Step 5: Sort and return top-k
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        candidates.truncate(k);
+        Ok(candidates)
     }
     
     pub fn len(&self) -> usize {
@@ -366,7 +438,15 @@ impl SPANNIndex {
     }
     
     /// Load index from disk
+    /// Load index in in-memory mode (default)
     pub fn load(path: &str) -> std::io::Result<Self> {
+        Self::load_with_mode(path, false)
+    }
+    
+    /// Load index with optional on-demand mode
+    /// on_demand=false: Load everything into memory (default)
+    /// on_demand=true: Only load head index, posting lists + vectors loaded per query
+    pub fn load_with_mode(path: &str, on_demand: bool) -> std::io::Result<Self> {
         let (postings, full_vectors, list_infos) = crate::spann::SPANNStorage::load(path)?;
         
         // Load metadata
@@ -387,6 +467,8 @@ impl SPANNIndex {
             _ => QuantizationType::None,
         };
         
+        let dim = full_vectors[0].len();
+        
         // Rebuild head index
         let mut head_id_map = Vec::new();
         let mut head_vectors = Vec::new();
@@ -399,10 +481,20 @@ impl SPANNIndex {
         let mut head_index = SPTAGBKTIndex::new(32, 2000, 32, 1.0, 500, 32);
         head_index.build(head_vectors, 2);
         
-        println!("Index loaded from {}", path);
-        println!("  Vectors: {}", full_vectors.len());
-        println!("  Heads: {}", num_heads);
-        println!("  Postings: {}", postings.len());
+        // In on-demand mode, clear posting lists and vectors to save memory
+        let (postings, full_vectors) = if on_demand {
+            println!("Index loaded in ON-DEMAND mode from {}", path);
+            println!("  Heads: {} (in memory)", num_heads);
+            println!("  Posting lists: {} (on disk)", list_infos.len());
+            println!("  Vectors: {} (on disk)", full_vectors.len());
+            (Vec::new(), Vec::new())
+        } else {
+            println!("Index loaded in IN-MEMORY mode from {}", path);
+            println!("  Vectors: {}", full_vectors.len());
+            println!("  Heads: {}", num_heads);
+            println!("  Postings: {}", postings.len());
+            (postings, full_vectors)
+        };
         
         Ok(Self {
             head_index,
@@ -419,6 +511,8 @@ impl SPANNIndex {
             hbc_sample_size: Some(100_000),
             list_infos,
             index_path: Some(path.to_string()),
+            on_demand_mode: on_demand,
+            dim,
         })
     }
     

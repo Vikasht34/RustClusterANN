@@ -107,16 +107,16 @@ async fn main() {
     let size = std::fs::metadata(&index_path).unwrap().len();
     println!("  File size: {:.2} MB\n", size as f32 / 1024.0 / 1024.0);
     
-    // Load index metadata and create async storage
-    println!("Creating async storage for on-demand loading...");
-    let loaded_index = SPANNIndex::load(&index_path).unwrap();
+    // Load index in ON-DEMAND mode
+    println!("Loading index in ON-DEMAND mode...");
+    let loaded_index = SPANNIndex::load_with_mode(&index_path, true).unwrap();
     
     // Create optimized async storage
     let storage = loaded_index.create_async_storage()
         .expect("Failed to create async storage");
     
     println!("\n=== On-Demand Search Benchmark ===");
-    println!("Only head index in RAM, posting lists loaded per query\n");
+    println!("Only head index in RAM, posting lists + vectors loaded per query\n");
     
     // Search with on-demand loading
     let start = Instant::now();
