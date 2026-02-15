@@ -12,7 +12,7 @@ fi
 
 # Build release binaries
 echo "Building release binaries..."
-cargo build --release --bin bench_sift_storage --bin bench_cohere1m
+cargo build --release --bin bench_sift_storage --bin bench_cohere1m --bin bench_sift_1bit
 
 # Create output directories
 mkdir -p /data/results/sift

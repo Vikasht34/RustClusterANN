@@ -19,6 +19,10 @@ path = "src/bin/bench_cohere1m.rs"
 name = "bench_sift_quant"
 path = "src/bin/bench_sift_quant.rs"
 
+[[bin]]
+name = "bench_sift_1bit"
+path = "src/bin/bench_sift_1bit.rs"
+
 [dependencies]
 rand = "0.8"
 rand_distr = "0.4"
