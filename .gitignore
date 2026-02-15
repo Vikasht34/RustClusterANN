@@ -1,0 +1,35 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# Data files
+/data/
+*.fvecs
+*.ivecs
+*.hdf5
+*.bin
+
+# Index files
+*.idx
+*.meta
+
+# Logs
+*.log
+*.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation (per user request)
+*.md
+!Cargo.toml

@@ -1,0 +1,142 @@
+use rustsptag::spann::{SPANNIndex, DistanceMetric, QuantizationType};
+use std::fs::File;
+use std::io::{Read, BufReader};
+use std::time::Instant;
+
+fn read_fvecs(filename: &str) -> Vec<Vec<f32>> {
+    let file = File::open(filename).expect("Failed to open file");
+    let mut reader = BufReader::new(file);
+    let mut vectors = Vec::new();
+    
+    loop {
+        let mut dim_bytes = [0u8; 4];
+        if reader.read_exact(&mut dim_bytes).is_err() {
+            break;
+        }
+        let dim = i32::from_le_bytes(dim_bytes) as usize;
+        
+        let mut vec = vec![0f32; dim];
+        let mut bytes = vec![0u8; dim * 4];
+        reader.read_exact(&mut bytes).expect("Failed to read vector");
+        
+        for i in 0..dim {
+            vec[i] = f32::from_le_bytes([
+                bytes[i * 4],
+                bytes[i * 4 + 1],
+                bytes[i * 4 + 2],
+                bytes[i * 4 + 3],
+            ]);
+        }
+        vectors.push(vec);
+    }
+    vectors
+}
+
+fn read_ivecs(filename: &str) -> Vec<Vec<i32>> {
+    let file = File::open(filename).expect("Failed to open file");
+    let mut reader = BufReader::new(file);
+    let mut vectors = Vec::new();
+    
+    loop {
+        let mut dim_bytes = [0u8; 4];
+        if reader.read_exact(&mut dim_bytes).is_err() {
+            break;
+        }
+        let dim = i32::from_le_bytes(dim_bytes) as usize;
+        
+        let mut vec = vec![0i32; dim];
+        let mut bytes = vec![0u8; dim * 4];
+        reader.read_exact(&mut bytes).expect("Failed to read vector");
+        
+        for i in 0..dim {
+            vec[i] = i32::from_le_bytes([
+                bytes[i * 4],
+                bytes[i * 4 + 1],
+                bytes[i * 4 + 2],
+                bytes[i * 4 + 3],
+            ]);
+        }
+        vectors.push(vec);
+    }
+    vectors
+}
+
+fn benchmark_quantization(
+    base: &[Vec<f32>],
+    queries: &[Vec<f32>],
+    ground_truth: &[Vec<i32>],
+    quant_type: QuantizationType,
+    name: &str,
+) {
+    println!("\n=== {} ===", name);
+    
+    // Build index
+    println!("Building index...");
+    let start = Instant::now();
+    let mut index = SPANNIndex::new();
+    index.set_metric(DistanceMetric::L2);
+    index.set_quantization(quant_type);
+    index.build(base.to_vec());
+    let build_time = start.elapsed();
+    println!("  Build time: {:.2}s", build_time.as_secs_f32());
+    
+    // Search
+    println!("Searching...");
+    let start = Instant::now();
+    let mut total_recall = 0.0;
+    let mut latencies = Vec::new();
+    
+    for (i, query) in queries.iter().enumerate() {
+        let query_start = Instant::now();
+        let results = index.search(query, 10);
+        latencies.push(query_start.elapsed().as_secs_f64() * 1000.0);
+        
+        let gt = &ground_truth[i];
+        let mut hits = 0;
+        for (vec_id, _) in &results {
+            if gt.contains(&(*vec_id as i32)) {
+                hits += 1;
+            }
+        }
+        total_recall += hits as f32 / 10.0;
+    }
+    let search_time = start.elapsed();
+    let recall = total_recall / queries.len() as f32;
+    
+    // Latency percentiles
+    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let p50 = latencies[latencies.len() / 2];
+    let p90 = latencies[latencies.len() * 90 / 100];
+    let p99 = latencies[latencies.len() * 99 / 100];
+    
+    println!("\nResults:");
+    println!("  Build time:  {:.2}s", build_time.as_secs_f32());
+    println!("  Latency p50: {:.3} ms", p50);
+    println!("  Latency p90: {:.3} ms", p90);
+    println!("  Latency p99: {:.3} ms", p99);
+    println!("  Recall@10:   {:.2}%", recall * 100.0);
+    println!("  QPS:         {:.2}", queries.len() as f32 / search_time.as_secs_f32());
+}
+
+fn main() {
+    println!("=== SIFT 1M Quantization Comparison ===\n");
+    
+    // Load data
+    println!("Loading SIFT 1M dataset...");
+    let base = read_fvecs("data/sift/sift_base.fvecs");
+    let queries = read_fvecs("data/sift/sift_query.fvecs");
+    let ground_truth = read_ivecs("data/sift/sift_groundtruth.ivecs");
+    println!("  Base: {} vectors", base.len());
+    println!("  Queries: {} vectors", queries.len());
+    
+    // Test all quantization levels
+    benchmark_quantization(&base, &queries, &ground_truth, QuantizationType::None, "Full Precision (32-bit)");
+    benchmark_quantization(&base, &queries, &ground_truth, QuantizationType::FourBit, "4-bit Quantization (8x compression)");
+    benchmark_quantization(&base, &queries, &ground_truth, QuantizationType::TwoBit, "2-bit Quantization (16x compression)");
+    benchmark_quantization(&base, &queries, &ground_truth, QuantizationType::OneBit, "1-bit Quantization (32x compression)");
+    
+    println!("\n=== Summary Table ===");
+    println!("| Quantization | Compression | Build (s) | p50 (ms) | p90 (ms) | p99 (ms) | Recall@10 | QPS |");
+    println!("|--------------|-------------|-----------|----------|----------|----------|-----------|-----|");
+    println!("| Run the benchmark to see results |");
+}
