@@ -64,6 +64,10 @@ pub struct SPANNIndex {
     
     // Optional: sample size for HBC (None = no sampling, SPTAG default)
     hbc_sample_size: Option<usize>,
+    
+    // Storage metadata (for on-demand loading)
+    list_infos: Vec<crate::spann::storage::ListInfo>,
+    index_path: Option<String>,
 }
 
 
@@ -82,6 +86,8 @@ impl SPANNIndex {
             num_heads_to_search: 64,        // Search 64 heads
             internal_result_num: 64,        // 64 candidates during build
             hbc_sample_size: Some(100_000), // Sample 100K for HBC (PlanetScale approach)
+            list_infos: Vec::new(),
+            index_path: None,
         }
     }
     
@@ -302,6 +308,84 @@ impl SPANNIndex {
         results.truncate(k);
         results
     }
+
+    /// On-demand search: loads posting lists from disk as needed
+    /// Only head index stays in RAM, posting lists loaded per query
+    pub async fn search_async(
+        &self,
+        query: &[f32],
+        k: usize,
+        storage: &crate::spann::OptimizedAsyncStorage,
+    ) -> std::io::Result<Vec<(usize, f32)>> {
+        use std::collections::HashSet;
+        
+        // Step 1: Search head index (in RAM)
+        let head_results = self.head_index.search(query, self.num_heads_to_search, 500);
+        let posting_ids: Vec<usize> = head_results.iter().map(|(idx, _)| *idx).collect();
+        
+        // Step 2: Prefetch posting lists (hint to OS)
+        storage.prefetch_postings(&posting_ids).await?;
+        
+        // Step 3: Load posting lists in parallel from disk
+        let posting_data = storage.load_postings_parallel(&posting_ids).await?;
+        
+        // Step 4: Deserialize and collect candidates
+        let mut seen = HashSet::new();
+        let mut candidates = Vec::new();
+        
+        for data in posting_data {
+            // Deserialize posting list from bytes
+            let posting = self.deserialize_posting(&data)?;
+            for vec_id in posting.vector_ids {
+                if seen.insert(vec_id) {
+                    candidates.push(vec_id);
+                }
+            }
+        }
+        
+        // Step 5: Rerank with exact distances
+        let mut results: Vec<(usize, f32)> = Vec::new();
+        for vec_id in candidates {
+            if vec_id < self.full_vectors.len() {
+                let vec_ref: &Vec<f32> = &self.full_vectors[vec_id];
+                let dist = self.compute_distance(query, vec_ref);
+                results.push((vec_id, dist));
+            }
+        }
+        
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        results.truncate(k);
+        Ok(results)
+    }
+
+    /// Deserialize posting list from bytes
+    fn deserialize_posting(&self, data: &[u8]) -> std::io::Result<PostingList> {
+        use std::io::Cursor;
+        use std::io::Read;
+        
+        let mut cursor = Cursor::new(data);
+        let mut head_id_bytes = [0u8; 8];
+        cursor.read_exact(&mut head_id_bytes)?;
+        let head_id = usize::from_le_bytes(head_id_bytes);
+        
+        let mut count_bytes = [0u8; 8];
+        cursor.read_exact(&mut count_bytes)?;
+        let count = usize::from_le_bytes(count_bytes);
+        
+        let mut vector_ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut id_bytes = [0u8; 8];
+            cursor.read_exact(&mut id_bytes)?;
+            vector_ids.push(usize::from_le_bytes(id_bytes));
+        }
+        
+        Ok(PostingList {
+            head_id,
+            vector_ids,
+            quantized_data: None,
+            quantizer: None,
+        })
+    }
     
     pub fn len(&self) -> usize {
         self.full_vectors.len()
@@ -340,7 +424,7 @@ impl SPANNIndex {
     
     /// Load index from disk
     pub fn load(path: &str) -> std::io::Result<Self> {
-        let (postings, full_vectors, _list_infos) = crate::spann::SPANNStorage::load(path)?;
+        let (postings, full_vectors, list_infos) = crate::spann::SPANNStorage::load(path)?;
         
         // Load metadata
         let meta_path = format!("{}.meta", path);
@@ -390,6 +474,21 @@ impl SPANNIndex {
             num_heads_to_search: meta["num_heads_to_search"].as_u64().unwrap() as usize,
             internal_result_num: 64,
             hbc_sample_size: Some(100_000),
+            list_infos,
+            index_path: Some(path.to_string()),
         })
+    }
+    
+    /// Create optimized async storage for on-demand loading
+    pub fn create_async_storage(&self) -> Option<crate::spann::OptimizedAsyncStorage> {
+        if let Some(ref path) = self.index_path {
+            Some(crate::spann::OptimizedAsyncStorage::new(
+                path.clone(),
+                self.list_infos.clone(),
+                true, // enable compression
+            ))
+        } else {
+            None
+        }
     }
 }
