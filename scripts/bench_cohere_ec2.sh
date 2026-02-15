@@ -14,7 +14,7 @@ echo "Output directory: $OUTPUT_DIR"
 echo "Index directory: $INDEX_DIR"
 echo "Started at: $(date)"
 
-cd /home/ec2-user/rustsptag
+cd /RustClusterANN
 
 # Build release binary
 cargo build --release --bin bench_cohere1m
