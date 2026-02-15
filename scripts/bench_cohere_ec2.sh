@@ -2,8 +2,8 @@
 set -e
 
 COHERE_FILE="/data/documents-1m.hdf5"
-OUTPUT_DIR="/data/results/cohere"
-INDEX_DIR="/data/indexes/cohere"
+OUTPUT_DIR="/nvme/results/cohere"
+INDEX_DIR="/nvme/indexes/cohere"
 
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$INDEX_DIR"

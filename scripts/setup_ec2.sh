@@ -23,10 +23,10 @@ echo "Building release binaries..."
 cargo build --release
 
 # Create output directories
-mkdir -p /data/results/sift
-mkdir -p /data/results/cohere
-mkdir -p /data/indexes/sift
-mkdir -p /data/indexes/cohere
+mkdir -p /nvme/results/sift
+mkdir -p /nvme/results/cohere
+mkdir -p /nvme/indexes/sift
+mkdir -p /nvme/indexes/cohere
 
 echo ""
 echo "=== Setup Complete ==="
@@ -36,5 +36,5 @@ echo "  ./scripts/bench_sift_ec2.sh &"
 echo "  ./scripts/bench_cohere_ec2.sh &"
 echo ""
 echo "Monitor progress:"
-echo "  tail -f /data/results/sift/*.log"
-echo "  tail -f /data/results/cohere/*.log"
+echo "  tail -f /nvme/results/sift/*.log"
+echo "  tail -f /nvme/results/cohere/*.log"
