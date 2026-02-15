@@ -10,14 +10,6 @@ if ! command -v cargo &> /dev/null; then
     source $HOME/.cargo/env
 fi
 
-# Clone repository
-if [ ! -d "rustsptag" ]; then
-    echo "Cloning repository..."
-    git clone https://github.com/Vikasht34/rustsptag.git
-fi
-
-cd rustsptag
-
 # Build release binaries
 echo "Building release binaries..."
 cargo build --release --bin bench_sift_storage --bin bench_cohere1m
