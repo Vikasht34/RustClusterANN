@@ -83,15 +83,15 @@ fn main() {
     // Load Cohere 1M dataset
     println!("Loading Cohere 1M from: {}", data_path);
     let start = Instant::now();
-    let base = read_binary_vectors(&format!("{}/base.bin", data_path.trim_end_matches(".hdf5")));
+    let base = read_binary_vectors(&format!("{}/base.bin", data_path));
     println!("  Loaded {} vectors ({}D) in {:.2}s", base.len(), base[0].len(), start.elapsed().as_secs_f32());
     
     println!("Loading queries...");
-    let queries = read_binary_vectors(&format!("{}/query.bin", data_path.trim_end_matches(".hdf5")));
+    let queries = read_binary_vectors(&format!("{}/query.bin", data_path));
     println!("  Loaded {} queries", queries.len());
     
     println!("Loading ground truth...");
-    let ground_truth = read_binary_groundtruth(&format!("{}/groundtruth.bin", data_path.trim_end_matches(".hdf5")));
+    let ground_truth = read_binary_groundtruth(&format!("{}/groundtruth.bin", data_path));
     println!("  Loaded {} ground truth vectors (top-{})\n", ground_truth.len(), ground_truth[0].len());
 
     // Build SPANN index
