@@ -20,6 +20,10 @@ name = "bench_sift_quant"
 path = "src/bin/bench_sift_quant.rs"
 
 [[bin]]
+name = "bench_cohere_1bit"
+path = "src/bin/bench_cohere_1bit.rs"
+
+[[bin]]
 name = "bench_sift_1bit"
 path = "src/bin/bench_sift_1bit.rs"
 
