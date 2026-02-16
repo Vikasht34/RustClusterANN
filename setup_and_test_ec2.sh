@@ -9,13 +9,13 @@ DATA_ROOT="/data"
 OUTPUT_ROOT="/tmp/results"
 S3_BUCKET="s3://one-click-tests/datasets"
 
-# Dataset configurations: name, s3_file, k
+# Dataset configurations: name, s3_file, k, metric
 declare -a DATASETS=(
-    "gist:gist-960-euclidean.hdf5:100"
-    "glove:glove-200-angular.hdf5:100"
-    "mpnet-msmarco:mpnet_marco.hdf5:100"
-    "tasb-msmarco:marco_tasb.hdf5:100"
-    "snowflake-msmarco:snowflake_embeddings.hdf5:100"
+    "gist:gist-960-euclidean.hdf5:100:l2"
+    "glove:glove-200-angular.hdf5:100:cosine"
+    "mpnet-msmarco:mpnet_marco.hdf5:100:l2"
+    "tasb-msmarco:marco_tasb.hdf5:100:inner-product"
+    "snowflake-msmarco:snowflake_embeddings.hdf5:100:l2"
 )
 
 echo "=========================================="
@@ -33,7 +33,7 @@ mkdir -p "$OUTPUT_ROOT"
 # Function to download and convert a dataset
 setup_dataset() {
     local config=$1
-    IFS=':' read -r name s3_file k <<< "$config"
+    IFS=':' read -r name s3_file k metric <<< "$config"
     
     local dataset_dir="${DATA_ROOT}/${name}"
     local hdf5_file="${dataset_dir}/${s3_file}"

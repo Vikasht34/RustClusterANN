@@ -26,6 +26,9 @@ struct Args {
     
     #[arg(long, default_value = "4096")]
     max_check: usize,
+    
+    #[arg(long, default_value = "inner-product")]
+    metric: String,  // "l2", "inner-product", or "cosine"
 }
 
 fn read_binary_vectors(filename: &str) -> Vec<Vec<f32>> {
@@ -101,17 +104,28 @@ async fn main() {
     // Check if index exists
     let index_exists = std::path::Path::new(&args.index_path).exists();
     
+    // Parse metric
+    let metric = match args.metric.as_str() {
+        "l2" => DistanceMetric::L2,
+        "inner-product" => DistanceMetric::InnerProduct,
+        "cosine" => DistanceMetric::InnerProduct,  // Cosine = normalized inner product
+        _ => {
+            eprintln!("Invalid metric: {}. Use 'l2', 'inner-product', or 'cosine'", args.metric);
+            std::process::exit(1);
+        }
+    };
+    
     if !index_exists {
         // Load data and build index
-        println!("Loading Cohere 1M dataset from: {}", args.data_path);
+        println!("Loading dataset from: {}", args.data_path);
         let start = Instant::now();
         let base = read_binary_vectors(&format!("{}/base.bin", args.data_path));
         println!("  Loaded {} vectors ({}D) in {:.2}s", base.len(), base[0].len(), start.elapsed().as_secs_f32());
         
-        println!("Building SPANN index...");
+        println!("Building SPANN index with {} metric...", args.metric);
         let start = Instant::now();
         let mut index = SPANNIndex::new();
-        index.set_metric(DistanceMetric::InnerProduct);
+        index.set_metric(metric);
         index.set_hbc_sample_size(Some(200_000));
         index.build(base);
         let build_time = start.elapsed();

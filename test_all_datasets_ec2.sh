@@ -12,19 +12,19 @@ BINARY="./target/release/bench_cohere_ondemand"
 # Create output directory
 mkdir -p "$OUTPUT_ROOT"
 
-# Dataset configurations: name, data_path, index_path, k
+# Dataset configurations: name, data_path, index_path, k, metric
 declare -a DATASETS=(
-    "gist:${DATA_ROOT}/gist:${OUTPUT_ROOT}/gist.idx:100"
-    "glove:${DATA_ROOT}/glove:${OUTPUT_ROOT}/glove.idx:100"
-    "mpnet-msmarco:${DATA_ROOT}/mpnet-msmarco:${OUTPUT_ROOT}/mpnet.idx:10"
-    "tasb-msmarco:${DATA_ROOT}/tasb-msmarco:${OUTPUT_ROOT}/tasb.idx:10"
-    "snowflake-msmarco:${DATA_ROOT}/snowflake-msmarco:${OUTPUT_ROOT}/snowflake.idx:10"
+    "gist:${DATA_ROOT}/gist:${OUTPUT_ROOT}/gist.idx:100:l2"
+    "glove:${DATA_ROOT}/glove:${OUTPUT_ROOT}/glove.idx:100:cosine"
+    "mpnet-msmarco:${DATA_ROOT}/mpnet-msmarco:${OUTPUT_ROOT}/mpnet.idx:10:l2"
+    "tasb-msmarco:${DATA_ROOT}/tasb-msmarco:${OUTPUT_ROOT}/tasb.idx:10:inner-product"
+    "snowflake-msmarco:${DATA_ROOT}/snowflake-msmarco:${OUTPUT_ROOT}/snowflake.idx:10:l2"
 )
 
 # Function to run benchmark for a dataset
 run_benchmark() {
     local config=$1
-    IFS=':' read -r name data_path index_path k <<< "$config"
+    IFS=':' read -r name data_path index_path k metric <<< "$config"
     
     local log_file="${OUTPUT_ROOT}/${name}_ondemand.log"
     
@@ -33,6 +33,7 @@ run_benchmark() {
     echo "Data: $data_path" | tee -a "$log_file"
     echo "Index: $index_path" | tee -a "$log_file"
     echo "K: $k" | tee -a "$log_file"
+    echo "Metric: $metric" | tee -a "$log_file"
     echo "Started: $(date)" | tee -a "$log_file"
     echo "========================================" | tee -a "$log_file"
     
@@ -42,6 +43,7 @@ run_benchmark() {
         --index-path "$index_path" \
         --zstd \
         --delta \
+        --metric "$metric" \
         2>&1 | tee -a "$log_file"
     
     echo "" | tee -a "$log_file"
