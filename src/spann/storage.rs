@@ -111,17 +111,26 @@ impl SPANNStorage {
                 buffer
             };
             
-            // Align to page boundary
-            let page_offset = (start_offset % PAGE_SIZE as u64) as u32;
-            let aligned_size = ((data.len() + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
+            // Align write offset to PAGE_SIZE boundary for Direct I/O
+            let current_offset = file.seek(SeekFrom::Current(0))?;
+            let aligned_offset = (current_offset + PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1);
+            let padding_before = (aligned_offset - current_offset) as usize;
+            
+            if padding_before > 0 {
+                file.write_all(&vec![0u8; padding_before])?;
+            }
+            
+            let start_offset = aligned_offset;
+            let page_offset = 0; // Always 0 since we're aligned
             
             // Write data
             file.write_all(&data)?;
             
             // Pad to page boundary
-            let padding = aligned_size - data.len();
-            if padding > 0 {
-                file.write_all(&vec![0u8; padding])?;
+            let aligned_size = ((data.len() + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE;
+            let padding_after = aligned_size - data.len();
+            if padding_after > 0 {
+                file.write_all(&vec![0u8; padding_after])?;
             }
             
             let end_offset = file.seek(SeekFrom::Current(0))?;

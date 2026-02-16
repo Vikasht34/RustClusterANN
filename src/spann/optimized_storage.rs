@@ -17,6 +17,7 @@ pub struct OptimizedAsyncStorage {
 
 impl OptimizedAsyncStorage {
     pub fn new(path: String, list_infos: Vec<ListInfo>, enable_compression: bool) -> Self {
+        // Enable Direct I/O on Linux (offsets are now properly aligned)
         let enable_direct_io = cfg!(target_os = "linux");
         
         Self {
@@ -76,7 +77,25 @@ impl OptimizedAsyncStorage {
                 info.total_bytes as usize
             };
             
-            let mut buffer = vec![0u8; read_size];
+            // Allocate aligned buffer for Direct I/O
+            let mut buffer = if enable_direct_io {
+                #[cfg(target_os = "linux")]
+                {
+                    // Allocate 4KB-aligned buffer
+                    let layout = std::alloc::Layout::from_size_align(read_size, 4096).unwrap();
+                    unsafe {
+                        let ptr = std::alloc::alloc(layout);
+                        Vec::from_raw_parts(ptr, read_size, read_size)
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    vec![0u8; read_size]
+                }
+            } else {
+                vec![0u8; read_size]
+            };
+            
             file.read_exact(&mut buffer)?;
             
             // Trim to actual size
