@@ -127,6 +127,10 @@ impl SPANNIndex {
         self.quantization = quantization;
     }
     
+    pub fn set_num_heads_to_search(&mut self, num_heads: usize) {
+        self.num_heads_to_search = num_heads;
+    }
+    
     pub fn set_hbc_sample_size(&mut self, sample_size: Option<usize>) {
         self.hbc_sample_size = sample_size;
     }

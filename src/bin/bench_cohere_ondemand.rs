@@ -153,11 +153,14 @@ async fn main() {
     
     println!("Loading ground truth...");
     let ground_truth = read_binary_groundtruth(&format!("{}/groundtruth.bin", data_path));
-    println!("  Loaded {} ground truth vectors (top-{})\n", ground_truth.len(), ground_truth[0].len());
+    println!("  Loaded {} ground truth vectors (top-{})\n", ground_truth[0].len(), ground_truth.len());
     
     // Load index in ON-DEMAND mode
     println!("Loading index in ON-DEMAND mode...");
-    let loaded_index = SPANNIndex::load_with_mode(&index_path, true).unwrap();
+    let mut loaded_index = SPANNIndex::load_with_mode(&index_path, true).unwrap();
+    
+    // Set num_heads_to_search for better recall (128 instead of 64)
+    loaded_index.set_num_heads_to_search(128);
     
     // Create optimized async storage
     let storage = loaded_index.create_async_storage()
@@ -169,7 +172,7 @@ async fn main() {
     
     // Analyze search parameters
     println!("\n=== Search Configuration ===");
-    println!("num_heads_to_search: 64");
+    println!("num_heads_to_search: 128 (increased for better recall)");
     println!("Total posting lists: {}", storage.list_infos.len());
     
     let mut total_vecs = 0;
