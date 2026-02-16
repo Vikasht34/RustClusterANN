@@ -11,6 +11,7 @@ pub mod compression;
 pub mod rearrange;
 pub mod uring;
 pub mod batch;
+pub mod fast_dedup;
 
 pub use index::{SPANNIndex, PostingList, DistanceMetric, QuantizationType};
 pub use hbc::HBCSelector;
@@ -18,6 +19,7 @@ pub use storage::SPANNStorage;
 pub use async_storage::AsyncStorage;
 pub use optimized_storage::OptimizedAsyncStorage;
 pub use simd_delta::{encode_delta_simd, decode_delta_simd};
+pub use fast_dedup::FastDedup;
 pub use workspace::{SearchWorkspace, WorkspacePool};
 pub use compression::ZstdCompressor;
 pub use rearrange::rearrange_posting_list;

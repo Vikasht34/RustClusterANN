@@ -89,6 +89,9 @@ pub struct SPANNIndex {
     // Optimization flags
     enable_rearrangement: bool,
     enable_dict_training: bool,
+    
+    // Search limits (SPTAG defaults)
+    max_check: usize,  // Max candidates to check (default 4096)
 }
 
 
@@ -115,9 +118,9 @@ impl SPANNIndex {
             dim: 0,
             enable_rearrangement: false,
             enable_dict_training: false,
+            max_check: 4096,                // SPTAG default
         }
     }
-    
     pub fn enable_optimizations(&mut self, rearrangement: bool, dict_training: bool) {
         self.enable_rearrangement = rearrangement;
         self.enable_dict_training = dict_training;
@@ -133,6 +136,10 @@ impl SPANNIndex {
     
     pub fn set_num_heads_to_search(&mut self, num_heads: usize) {
         self.num_heads_to_search = num_heads;
+    }
+    
+    pub fn set_max_check(&mut self, max_check: usize) {
+        self.max_check = max_check;
     }
     
     pub fn set_hbc_sample_size(&mut self, sample_size: Option<usize>) {
@@ -404,8 +411,6 @@ impl SPANNIndex {
         k: usize,
         storage: &crate::spann::OptimizedAsyncStorage,
     ) -> std::io::Result<Vec<(usize, f32)>> {
-        use std::collections::HashSet;
-        
         // Step 1: Search head index (in RAM)
         let head_results = self.head_index.search(query, self.num_heads_to_search, 500);
         let posting_ids: Vec<usize> = head_results.iter().map(|(idx, _)| *idx).collect();
@@ -417,15 +422,22 @@ impl SPANNIndex {
         let posting_data = storage.load_postings_parallel(&posting_ids).await?;
         
         // Step 4: Parse posting lists and collect candidates with vectors
-        let mut seen = HashSet::new();
-        let mut candidates = Vec::new();
+        let mut deduper = crate::spann::FastDedup::new(self.max_check);
+        let mut candidates = Vec::with_capacity(self.max_check);
         let enable_delta = storage.is_delta_enabled();
         
         // Reusable buffers
         let mut vec_buffer = vec![0.0f32; self.dim];
         let mut delta_buffer = vec![0.0f32; self.dim];
         
-        for (posting_idx, data) in posting_data.iter().enumerate() {
+        // Function pointer for delta decoding (avoid branch in hot loop)
+        let decode_fn: fn(&[f32], &[f32], &mut [f32]) = if enable_delta {
+            crate::spann::simd_delta::decode_delta_simd
+        } else {
+            |src, _, dst| dst.copy_from_slice(src)
+        };
+        
+        'outer: for (posting_idx, data) in posting_data.iter().enumerate() {
             let list_info = &storage.list_infos[posting_ids[posting_idx]];
             let count = list_info.ele_count as usize;
             let head_id = posting_ids[posting_idx];
@@ -458,7 +470,13 @@ impl SPANNIndex {
             
             // Read vectors (full precision f32 or delta-encoded)
             for &vec_id in &vec_ids {
-                if !seen.insert(vec_id) {
+                // Check MaxCheck limit (early termination)
+                if candidates.len() >= self.max_check {
+                    break 'outer;
+                }
+                
+                // Fast dedup check
+                if deduper.check_and_set(vec_id) {
                     cursor += self.dim * 4;
                     continue;
                 }
@@ -474,15 +492,11 @@ impl SPANNIndex {
                 }
                 cursor += self.dim * 4;
                 
-                // Decode delta if enabled (SIMD optimized)
-                if enable_delta {
-                    crate::spann::simd_delta::decode_delta_simd(&vec_buffer, head_vec, &mut delta_buffer);
-                    let dist = self.compute_distance(query, &delta_buffer);
-                    candidates.push((vec_id, dist));
-                } else {
-                    let dist = self.compute_distance(query, &vec_buffer);
-                    candidates.push((vec_id, dist));
-                }
+                // Decode using function pointer (no branch!)
+                decode_fn(&vec_buffer, head_vec, &mut delta_buffer);
+                
+                let dist = self.compute_distance(query, &delta_buffer);
+                candidates.push((vec_id, dist));
             }
         }
         
@@ -619,6 +633,7 @@ impl SPANNIndex {
             dim,
             enable_rearrangement: false,
             enable_dict_training: false,
+            max_check: 4096,  // SPTAG default
         })
     }
     

@@ -3,6 +3,30 @@ use std::fs::File;
 use std::io::{Read, BufReader};
 use std::time::Instant;
 use std::env;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(name = "bench_cohere_ondemand")]
+#[command(about = "Benchmark Cohere 1M dataset with on-demand loading")]
+struct Args {
+    #[arg(long)]
+    data_path: String,
+    
+    #[arg(long)]
+    index_path: String,
+    
+    #[arg(long)]
+    zstd: bool,
+    
+    #[arg(long)]
+    delta: bool,
+    
+    #[arg(long, default_value = "128")]
+    num_heads: usize,
+    
+    #[arg(long, default_value = "4096")]
+    max_check: usize,
+}
 
 fn read_binary_vectors(filename: &str) -> Vec<Vec<f32>> {
     let file = File::open(filename).unwrap_or_else(|e| {
@@ -70,97 +94,56 @@ fn read_binary_groundtruth(filename: &str) -> Vec<Vec<i32>> {
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = env::args().collect();
-    
-    let data_path = if args.len() > 1 && args[1] == "--data-path" {
-        args[2].clone()
-    } else {
-        "/data".to_string()
-    };
-    
-    let index_path = if args.len() > 3 && args[3] == "--index-path" {
-        args[4].clone()
-    } else {
-        "cohere_ondemand.idx".to_string()
-    };
-
-    let bits = if let Some(pos) = args.iter().position(|x| x == "--bits") {
-        args[pos + 1].parse::<usize>().unwrap_or(1)
-    } else {
-        1
-    };
-
-    let enable_quantization = args.contains(&"--enable-compression".to_string());
-    let enable_zstd = args.contains(&"--zstd".to_string());
-    let enable_delta = args.contains(&"--delta".to_string());
-    let search_only = args.contains(&"--search-only".to_string());
+    let args = Args::parse();
     
     println!("=== Cohere 1M On-Demand Loading Benchmark ===\n");
     
     // Check if index exists
-    let index_exists = std::path::Path::new(&index_path).exists();
+    let index_exists = std::path::Path::new(&args.index_path).exists();
     
-    if !index_exists && !search_only {
+    if !index_exists {
         // Load data and build index
-        println!("Loading Cohere 1M dataset from: {}", data_path);
+        println!("Loading Cohere 1M dataset from: {}", args.data_path);
         let start = Instant::now();
-        let base = read_binary_vectors(&format!("{}/base.bin", data_path));
+        let base = read_binary_vectors(&format!("{}/base.bin", args.data_path));
         println!("  Loaded {} vectors ({}D) in {:.2}s", base.len(), base[0].len(), start.elapsed().as_secs_f32());
         
-        // Build index with quantization
-        let quantization = if enable_quantization {
-            match bits {
-                1 => QuantizationType::OneBit,
-                2 => QuantizationType::TwoBit,
-                4 => QuantizationType::FourBit,
-                _ => {
-                    eprintln!("Invalid bits: {}. Must be 1, 2, or 4", bits);
-                    std::process::exit(1);
-                }
-            }
-        } else {
-            QuantizationType::None
-        };
-        
-        println!("Building SPANN index with {:?} quantization...", quantization);
+        println!("Building SPANN index...");
         let start = Instant::now();
         let mut index = SPANNIndex::new();
         index.set_metric(DistanceMetric::InnerProduct);
-        index.set_hbc_sample_size(Some(200_000));  // 20% sampling (same as in-memory)
-        index.set_quantization(quantization);
+        index.set_hbc_sample_size(Some(200_000));
         index.build(base);
         let build_time = start.elapsed();
         println!("Build time: {:.2}s ({:.2} min)\n", build_time.as_secs_f32(), build_time.as_secs_f32() / 60.0);
         
         // Save index
-        println!("Saving index to: {}", index_path);
+        println!("Saving index to: {}", args.index_path);
         let start = Instant::now();
-        index.save(&index_path, enable_zstd, enable_delta).unwrap();
+        index.save(&args.index_path, args.zstd, args.delta).unwrap();
         println!("  Save time: {:.2}s", start.elapsed().as_secs_f32());
-        let size = std::fs::metadata(&index_path).unwrap().len();
+        let size = std::fs::metadata(&args.index_path).unwrap().len();
         println!("  File size: {:.2} MB\n", size as f32 / 1024.0 / 1024.0);
-    } else if search_only && !index_exists {
-        eprintln!("Error: --search-only specified but index not found at {}", index_path);
-        std::process::exit(1);
-    } else if index_exists {
-        println!("Index already exists at {}, skipping build\n", index_path);
+    } else {
+        println!("Index already exists at {}, skipping build\n", args.index_path);
     }
     
     // Load queries and ground truth
     println!("Loading queries...");
-    let queries = read_binary_vectors(&format!("{}/query.bin", data_path));
+    let queries = read_binary_vectors(&format!("{}/query.bin", args.data_path));
     println!("  Loaded {} queries", queries.len());
     
     println!("Loading ground truth...");
-    let ground_truth = read_binary_groundtruth(&format!("{}/groundtruth.bin", data_path));
+    let ground_truth = read_binary_groundtruth(&format!("{}/groundtruth.bin", args.data_path));
     println!("  Loaded {} ground truth vectors (top-{})\n", ground_truth[0].len(), ground_truth.len());
     
     // Load index in ON-DEMAND mode
     println!("Loading index in ON-DEMAND mode...");
-    let mut loaded_index = SPANNIndex::load_with_mode(&index_path, true).unwrap();
+    let mut loaded_index = SPANNIndex::load_with_mode(&args.index_path, true).unwrap();
     
-    // Set num_heads_to_search for better recall (128 instead of 64)
-    loaded_index.set_num_heads_to_search(128);
+    // Set configurable parameters
+    loaded_index.set_num_heads_to_search(args.num_heads);
+    loaded_index.set_max_check(args.max_check);
     
     // Create optimized async storage
     let storage = loaded_index.create_async_storage()
@@ -172,7 +155,8 @@ async fn main() {
     
     // Analyze search parameters
     println!("\n=== Search Configuration ===");
-    println!("num_heads_to_search: 128 (increased for better recall)");
+    println!("num_heads_to_search: {}", args.num_heads);
+    println!("max_check: {}", args.max_check);
     println!("Total posting lists: {}", storage.list_infos.len());
     
     let mut total_vecs = 0;
@@ -265,7 +249,7 @@ async fn main() {
     println!("  Recall@10: {:.2}%", recall * 100.0);
     println!();
     
-    let size = std::fs::metadata(&index_path).unwrap().len();
+    let size = std::fs::metadata(&args.index_path).unwrap().len();
     println!("=== Summary ===");
     println!("Dataset:      Cohere 1M (1,000,000 vectors, 768D)");
     println!("Index size:   {:.2} MB", size as f32 / 1024.0 / 1024.0);
