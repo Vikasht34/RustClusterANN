@@ -71,8 +71,8 @@ impl OptimizedAsyncStorage {
             
             // Read page-aligned data
             let read_size = if enable_direct_io {
-                // Round up to page size for Direct I/O
-                ((info.total_bytes as usize + PAGE_SIZE - 1) / PAGE_SIZE) * PAGE_SIZE
+                // Round up to 4KB for Direct I/O (filesystem block size)
+                ((info.total_bytes as usize + 4095) / 4096) * 4096
             } else {
                 info.total_bytes as usize
             };
@@ -85,6 +85,11 @@ impl OptimizedAsyncStorage {
                     let layout = std::alloc::Layout::from_size_align(read_size, 4096).unwrap();
                     unsafe {
                         let ptr = std::alloc::alloc(layout);
+                        if ptr.is_null() {
+                            return Err(io::Error::new(io::ErrorKind::OutOfMemory, "Failed to allocate aligned buffer"));
+                        }
+                        // Initialize to zero
+                        std::ptr::write_bytes(ptr, 0, read_size);
                         Vec::from_raw_parts(ptr, read_size, read_size)
                     }
                 }
