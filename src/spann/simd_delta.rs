@@ -5,15 +5,21 @@ pub fn encode_delta_simd(vector: &[f32], head: &[f32], output: &mut [f32]) {
     debug_assert_eq!(vector.len(), head.len());
     debug_assert_eq!(vector.len(), output.len());
     
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    #[cfg(target_arch = "x86_64")]
     {
-        unsafe { encode_delta_avx2(vector, head, output) };
-        return;
+        if is_x86_feature_detected!("avx2") {
+            unsafe { encode_delta_avx2(vector, head, output) };
+            return;
+        }
+        if is_x86_feature_detected!("sse2") {
+            unsafe { encode_delta_sse2(vector, head, output) };
+            return;
+        }
     }
     
-    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+    #[cfg(target_arch = "aarch64")]
     {
-        unsafe { encode_delta_sse2(vector, head, output) };
+        unsafe { encode_delta_neon(vector, head, output) };
         return;
     }
     
@@ -28,15 +34,21 @@ pub fn decode_delta_simd(delta: &[f32], head: &[f32], output: &mut [f32]) {
     debug_assert_eq!(delta.len(), head.len());
     debug_assert_eq!(delta.len(), output.len());
     
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    #[cfg(target_arch = "x86_64")]
     {
-        unsafe { decode_delta_avx2(delta, head, output) };
-        return;
+        if is_x86_feature_detected!("avx2") {
+            unsafe { decode_delta_avx2(delta, head, output) };
+            return;
+        }
+        if is_x86_feature_detected!("sse2") {
+            unsafe { decode_delta_sse2(delta, head, output) };
+            return;
+        }
     }
     
-    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+    #[cfg(target_arch = "aarch64")]
     {
-        unsafe { decode_delta_sse2(delta, head, output) };
+        unsafe { decode_delta_neon(delta, head, output) };
         return;
     }
     
@@ -46,6 +58,7 @@ pub fn decode_delta_simd(delta: &[f32], head: &[f32], output: &mut [f32]) {
     }
 }
 
+// x86_64 implementations
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
@@ -120,6 +133,49 @@ unsafe fn decode_delta_sse2(delta: &[f32], head: &[f32], output: &mut [f32]) {
         let h = _mm_loadu_ps(head.as_ptr().add(offset));
         let result = _mm_add_ps(d, h);
         _mm_storeu_ps(output.as_mut_ptr().add(offset), result);
+    }
+    
+    for i in (chunks * 4)..len {
+        output[i] = delta[i] + head[i];
+    }
+}
+
+
+// ARM NEON implementations
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn encode_delta_neon(vector: &[f32], head: &[f32], output: &mut [f32]) {
+    let len = vector.len();
+    let chunks = len / 4;
+    
+    for i in 0..chunks {
+        let offset = i * 4;
+        let v = vld1q_f32(vector.as_ptr().add(offset));
+        let h = vld1q_f32(head.as_ptr().add(offset));
+        let delta = vsubq_f32(v, h);
+        vst1q_f32(output.as_mut_ptr().add(offset), delta);
+    }
+    
+    for i in (chunks * 4)..len {
+        output[i] = vector[i] - head[i];
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn decode_delta_neon(delta: &[f32], head: &[f32], output: &mut [f32]) {
+    let len = delta.len();
+    let chunks = len / 4;
+    
+    for i in 0..chunks {
+        let offset = i * 4;
+        let d = vld1q_f32(delta.as_ptr().add(offset));
+        let h = vld1q_f32(head.as_ptr().add(offset));
+        let result = vaddq_f32(d, h);
+        vst1q_f32(output.as_mut_ptr().add(offset), result);
     }
     
     for i in (chunks * 4)..len {
