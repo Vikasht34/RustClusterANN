@@ -83,6 +83,10 @@ pub struct SPANNIndex {
     
     // Dimension (needed for on-demand mode)
     dim: usize,
+    
+    // Optimization flags
+    enable_rearrangement: bool,
+    enable_dict_training: bool,
 }
 
 
@@ -105,7 +109,14 @@ impl SPANNIndex {
             index_path: None,
             on_demand_mode: false,
             dim: 0,
+            enable_rearrangement: false,
+            enable_dict_training: false,
         }
+    }
+    
+    pub fn enable_optimizations(&mut self, rearrangement: bool, dict_training: bool) {
+        self.enable_rearrangement = rearrangement;
+        self.enable_dict_training = dict_training;
     }
     
     pub fn set_metric(&mut self, metric: DistanceMetric) {
@@ -238,6 +249,20 @@ impl SPANNIndex {
         println!("    Min: {}, Max: {}", min_size, max_size);
         println!("    Average replicas per vector: {:.1}", avg_replicas);
         println!("    Pruned (kept closest): {}", pruned_count);
+        
+        // Phase 3: Rearrange posting lists for cache locality (if enabled)
+        if self.enable_rearrangement {
+            println!("  Rearranging posting lists for cache locality...");
+            for posting in &mut self.postings {
+                let head_vec = &self.full_vectors[posting.head_id];
+                crate::spann::rearrange::rearrange_posting_list(
+                    posting,
+                    &self.full_vectors,
+                    head_vec,
+                    self.metric,
+                );
+            }
+        }
     }
     
     fn quantize_postings(&mut self) {
@@ -597,6 +622,8 @@ impl SPANNIndex {
             index_path: Some(path.to_string()),
             on_demand_mode: on_demand,
             dim,
+            enable_rearrangement: false,
+            enable_dict_training: false,
         })
     }
     

@@ -83,11 +83,15 @@ impl SPANNStorage {
                 // Write full precision vectors
                 if enable_delta {
                     let head_vec = &full_vectors[posting.head_id];
+                    let mut delta_buffer = vec![0.0f32; head_vec.len()];
+                    
                     for &id in &posting.vector_ids {
                         let vec = &full_vectors[id];
-                        for (i, &val) in vec.iter().enumerate() {
-                            let delta = val - head_vec[i];
-                            buffer.extend_from_slice(&delta.to_le_bytes());
+                        // Use SIMD for delta encoding
+                        crate::spann::simd_delta::encode_delta_simd(vec, head_vec, &mut delta_buffer);
+                        
+                        for &val in &delta_buffer {
+                            buffer.extend_from_slice(&val.to_le_bytes());
                         }
                     }
                 } else {
@@ -296,6 +300,8 @@ impl SPANNStorage {
                     None
                 };
                 
+                let mut decode_buffer = vec![0.0f32; dim];
+                
                 for (i, &vec_id) in vector_ids.iter().enumerate() {
                     if !vector_map.contains_key(&vec_id) {
                         let vec_offset = vec_data_offset + i * dim * 4;
@@ -303,17 +309,18 @@ impl SPANNStorage {
                         for d in 0..dim {
                             let val_offset = vec_offset + d * 4;
                             let val_bytes = &buffer[val_offset..val_offset + 4];
-                            let mut val = f32::from_le_bytes([val_bytes[0], val_bytes[1], val_bytes[2], val_bytes[3]]);
-                            
-                            // Apply delta decoding if needed
-                            if let Some(ref head) = head_vec {
-                                val += head[d];
-                            }
-                            
+                            let val = f32::from_le_bytes([val_bytes[0], val_bytes[1], val_bytes[2], val_bytes[3]]);
                             vec.push(val);
                         }
                         
-                        all_vectors[vec_id] = vec;
+                        // Apply delta decoding with SIMD if needed
+                        if let Some(ref head) = head_vec {
+                            crate::spann::simd_delta::decode_delta_simd(&vec, head, &mut decode_buffer);
+                            all_vectors[vec_id] = decode_buffer.clone();
+                        } else {
+                            all_vectors[vec_id] = vec;
+                        }
+                        
                         vector_map.insert(vec_id, true);
                     }
                 }
@@ -333,6 +340,7 @@ impl SPANNStorage {
     /// Open file with Direct I/O (O_DIRECT)
     #[cfg(target_os = "linux")]
     pub fn open_direct_io(path: &str) -> io::Result<File> {
+        use std::os::unix::fs::OpenOptionsExt;
         OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECT)
@@ -343,6 +351,23 @@ impl SPANNStorage {
     pub fn open_direct_io(path: &str) -> io::Result<File> {
         // Fallback for non-Linux systems
         File::open(path)
+    }
+    
+    /// Allocate aligned buffer for Direct I/O
+    #[cfg(target_os = "linux")]
+    pub fn alloc_aligned_buffer(size: usize) -> Vec<u8> {
+        const ALIGNMENT: usize = 4096; // 4KB alignment for O_DIRECT
+        let aligned_size = (size + ALIGNMENT - 1) & !(ALIGNMENT - 1);
+        let layout = std::alloc::Layout::from_size_align(aligned_size, ALIGNMENT).unwrap();
+        unsafe {
+            let ptr = std::alloc::alloc(layout);
+            Vec::from_raw_parts(ptr, size, aligned_size)
+        }
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    pub fn alloc_aligned_buffer(size: usize) -> Vec<u8> {
+        vec![0u8; size]
     }
 
     /// Read posting list with Direct I/O
