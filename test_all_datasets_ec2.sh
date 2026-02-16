@@ -69,13 +69,8 @@ echo ""
 echo "All benchmarks completed!"
 echo "Results saved to: $OUTPUT_ROOT"
 echo ""
-echo "Summary:"
-for config in "${DATASETS[@]}"; do
-    IFS=':' read -r name _ _ _ <<< "$config"
-    log_file="${OUTPUT_ROOT}/${name}_ondemand.log"
-    if [ -f "$log_file" ]; then
-        echo ""
-        echo "=== $name ==="
-        grep -A 5 "=== Summary ===" "$log_file" | tail -6
-    fi
-done
+
+# Generate comprehensive report
+echo "Generating comprehensive report..."
+./generate_report.sh "$OUTPUT_ROOT"
+
