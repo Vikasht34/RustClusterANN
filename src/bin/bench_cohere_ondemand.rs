@@ -122,6 +122,11 @@ async fn main() {
         let base = read_binary_vectors(&format!("{}/base.bin", args.data_path));
         println!("  Loaded {} vectors ({}D) in {:.2}s", base.len(), base[0].len(), start.elapsed().as_secs_f32());
         
+        // Calculate uncompressed size before build (base will be moved)
+        let raw_vector_size = base.len() * base[0].len() * 4; // vectors in bytes
+        let raw_ids_size = base.len() * 4; // vector IDs
+        let estimated_uncompressed = raw_vector_size + raw_ids_size;
+        
         println!("Building SPANN index with {} metric...", args.metric);
         let start = Instant::now();
         let mut index = SPANNIndex::new();
@@ -136,8 +141,19 @@ async fn main() {
         let start = Instant::now();
         index.save(&args.index_path, args.zstd, args.delta).unwrap();
         println!("  Save time: {:.2}s", start.elapsed().as_secs_f32());
-        let size = std::fs::metadata(&args.index_path).unwrap().len();
-        println!("  File size: {:.2} MB\n", size as f32 / 1024.0 / 1024.0);
+        
+        // Report sizes
+        let posting_size = std::fs::metadata(&args.index_path).unwrap().len();
+        let head_size = std::fs::metadata(&format!("{}.head_index", args.index_path)).unwrap().len();
+        let total_size = posting_size + head_size;
+        
+        println!("\n=== Index Size Analysis ===");
+        println!("Uncompressed (estimated): {:.2} MB", estimated_uncompressed as f32 / 1024.0 / 1024.0);
+        println!("Posting lists (compressed): {:.2} MB", posting_size as f32 / 1024.0 / 1024.0);
+        println!("Head index: {:.2} MB", head_size as f32 / 1024.0 / 1024.0);
+        println!("Total index size: {:.2} MB", total_size as f32 / 1024.0 / 1024.0);
+        println!("Compression ratio: {:.2}x", estimated_uncompressed as f32 / posting_size as f32);
+        println!();
     } else {
         println!("Index already exists at {}, skipping build\n", args.index_path);
     }
