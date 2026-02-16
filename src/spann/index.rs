@@ -580,7 +580,7 @@ impl SPANNIndex {
             head_vectors.push(vec);
         }
         
-        // Rebuild head index from head vectors
+        // Rebuild head index from head vectors (fast - only 29K vectors)
         let mut head_id_map = Vec::new();
         for posting in &postings {
             head_id_map.push(posting.head_id);
@@ -588,7 +588,13 @@ impl SPANNIndex {
         
         let num_heads = head_vectors.len();
         let mut head_index = SPTAGBKTIndex::new(32, 2000, 32, 1.0, 500, 32);
-        head_index.build(head_vectors, 2);
+        
+        // Build head index quietly (takes ~5 seconds for 29K vectors)
+        print!("Rebuilding head index from {} vectors... ", num_heads);
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        head_index.build_quiet(head_vectors, 2);
+        println!("done");
+        println!();
         
         // In on-demand mode, clear posting lists and vectors to save memory
         let (postings, full_vectors) = if on_demand {

@@ -21,8 +21,18 @@ impl SPTAGBKTIndex {
     }
 
     pub fn build(&mut self, data: Vec<Vec<f32>>, refine_iters: usize) {
-        println!("Building SPTAG-BKT index for {} vectors...", data.len());
-        println!("Using {} trees for better coverage", self.num_trees);
+        self.build_with_verbosity(data, refine_iters, true);
+    }
+    
+    pub fn build_quiet(&mut self, data: Vec<Vec<f32>>, refine_iters: usize) {
+        self.build_with_verbosity(data, refine_iters, false);
+    }
+    
+    fn build_with_verbosity(&mut self, data: Vec<Vec<f32>>, refine_iters: usize, verbose: bool) {
+        if verbose {
+            println!("Building SPTAG-BKT index for {} vectors...", data.len());
+            println!("Using {} trees for better coverage", self.num_trees);
+        }
         
         let start = std::time::Instant::now();
         self.data = data;
