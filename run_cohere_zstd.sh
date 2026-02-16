@@ -21,10 +21,10 @@ echo "Started at: $(date)"
 cd /RustClusterANN
 
 # Build release binary
-cargo build --release --bin bench_cohere_1bit
+cargo build --release --bin bench_cohere_ondemand
 
-# Run benchmark with zstd + delta (no quantization)
-./target/release/bench_cohere_1bit \
+# Run benchmark with zstd + delta (on-demand mode)
+./target/release/bench_cohere_ondemand \
   --data-path "$DATA_DIR" \
   --index-path "$INDEX_DIR/cohere_1m_no_quant.idx" \
   --zstd \
