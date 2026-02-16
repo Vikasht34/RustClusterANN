@@ -6,8 +6,8 @@
 set -e
 
 DATA_DIR="/data"
-OUTPUT_DIR="/data/results/cohere_zstd"
-INDEX_DIR="/nvme/indexes/cohere_zstd"
+OUTPUT_DIR="/data/results/cohere"
+INDEX_DIR="/nvme/indexes/cohere"
 
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$INDEX_DIR"
