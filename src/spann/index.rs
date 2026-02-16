@@ -20,6 +20,14 @@ pub enum QuantizationType {
     FourBit,    // 4-bit (1-bit + 3 ex_bits)
 }
 
+#[derive(Default)]
+pub struct SearchStats {
+    pub bytes_read: usize,
+    pub posting_lists_accessed: usize,
+    pub head_search_time_us: u64,
+    pub posting_search_time_us: u64,
+}
+
 pub struct PostingList {
     pub head_id: usize,
     pub vector_ids: Vec<usize>,
@@ -288,12 +296,23 @@ impl SPANNIndex {
     }
 
     pub fn search(&self, query: &[f32], k: usize) -> Vec<(usize, f32)> {
+        let (results, _) = self.search_with_stats(query, k);
+        results
+    }
+
+    pub fn search_with_stats(&self, query: &[f32], k: usize) -> (Vec<(usize, f32)>, SearchStats) {
         use std::collections::HashSet;
+        use std::time::Instant;
+        
+        let mut stats = SearchStats::default();
         
         // Step 1: Search head index
+        let head_start = Instant::now();
         let head_results = self.head_index.search(query, self.num_heads_to_search, 500);
+        stats.head_search_time_us = head_start.elapsed().as_micros() as u64;
         
         // Step 2 & 3: Collect candidates and compute distances
+        let posting_start = Instant::now();
         let mut results: Vec<(usize, f32)> = Vec::new();
         let quant_metric = match self.metric {
             DistanceMetric::L2 => crate::multibit::MetricType::L2,
@@ -305,11 +324,15 @@ impl SPANNIndex {
                 continue;
             }
             
+            stats.posting_lists_accessed += 1;
             let posting = &self.postings[head_idx];
             
             // Use quantized distances if available, otherwise full precision
-            if let (Some(ref quantizer), Some(_)) = (&posting.quantizer, &posting.quantized_data) {
+            if let (Some(ref quantizer), Some(ref quant_data)) = (&posting.quantizer, &posting.quantized_data) {
                 // Quantized distance computation
+                stats.bytes_read += quant_data.len();
+                stats.bytes_read += posting.vector_ids.len() * 4; // vec_ids
+                
                 let distances = quantizer.compute_distances(query, quant_metric);
                 for (i, &vec_id) in posting.vector_ids.iter().enumerate() {
                     if i < distances.len() {
@@ -321,16 +344,20 @@ impl SPANNIndex {
                 for &vec_id in &posting.vector_ids {
                     if vec_id < self.full_vectors.len() {
                         let vec_ref = &self.full_vectors[vec_id];
+                        stats.bytes_read += vec_ref.len() * 4; // f32 vectors
                         let dist = self.compute_distance(query, vec_ref);
                         results.push((vec_id, dist));
                     }
                 }
+                stats.bytes_read += posting.vector_ids.len() * 4; // vec_ids
             }
         }
         
         results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         results.truncate(k);
-        results
+        stats.posting_search_time_us = posting_start.elapsed().as_micros() as u64;
+        
+        (results, stats)
     }
 
     /// On-demand search: loads posting lists from disk as needed

@@ -146,17 +146,23 @@ fn main() {
         let _ = loaded_index.search(&queries[i], 10);
     }
 
-    // Search all queries
+    // Search all queries with detailed metrics
     println!("\nSearching {} queries...", queries.len());
     let mut latencies = Vec::new();
     let mut recalls = Vec::new();
+    let mut bytes_read_per_query = Vec::new();
+    let mut posting_lists_accessed = Vec::new();
     
     let overall_start = Instant::now();
     for (i, query) in queries.iter().enumerate() {
         let start = Instant::now();
-        let results = loaded_index.search(query, 10);
+        let (results, stats) = loaded_index.search_with_stats(query, 10);
         let latency = start.elapsed();
         latencies.push(latency.as_secs_f64() * 1000.0); // Convert to ms
+        
+        // Track data transfer
+        bytes_read_per_query.push(stats.bytes_read);
+        posting_lists_accessed.push(stats.posting_lists_accessed);
         
         // Compute recall
         let result_ids: Vec<i32> = results.iter().map(|(id, _)| *id as i32).collect();
@@ -184,11 +190,20 @@ fn main() {
     
     let avg_recall = recalls.iter().sum::<f32>() / recalls.len() as f32;
     let qps = queries.len() as f64 / total_search_time.as_secs_f64();
+    
+    // Data transfer statistics
+    let avg_bytes = bytes_read_per_query.iter().sum::<usize>() as f64 / bytes_read_per_query.len() as f64;
+    let avg_posting_lists = posting_lists_accessed.iter().sum::<usize>() as f64 / posting_lists_accessed.len() as f64;
 
     // Print results
     println!("\n=== Search Results ===");
     println!("Total queries: {}", queries.len());
     println!("Total search time: {:.2}s", total_search_time.as_secs_f32());
+    println!();
+    
+    println!("=== Data Transfer per Query ===");
+    println!("  Avg bytes read:        {:.2} KB ({:.2} MB)", avg_bytes / 1024.0, avg_bytes / 1024.0 / 1024.0);
+    println!("  Avg posting lists:     {:.1}", avg_posting_lists);
     println!();
     
     println!("=== Latency Statistics (ms) ===");
