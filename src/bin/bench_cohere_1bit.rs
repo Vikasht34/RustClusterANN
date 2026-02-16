@@ -6,7 +6,11 @@ use std::time::Instant;
 use std::env;
 
 fn read_binary_vectors(filename: &str) -> Vec<Vec<f32>> {
-    let file = File::open(filename).expect("Failed to open file");
+    let file = File::open(filename).unwrap_or_else(|e| {
+        eprintln!("Failed to open file: {}", filename);
+        eprintln!("Error: {}", e);
+        panic!("File not found: {}", filename);
+    });
     let mut reader = BufReader::new(file);
     
     let mut header = [0u8; 8];
