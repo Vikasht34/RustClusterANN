@@ -1,5 +1,21 @@
 # EC2 Dataset Testing Guide
 
+## Quick Start (Automated)
+
+**One command to download, convert, and test all datasets:**
+
+```bash
+./setup_and_test_ec2.sh
+```
+
+This will:
+1. Download all 5 datasets from HuggingFace
+2. Convert to binary format (.bin files)
+3. Run benchmarks in parallel
+4. Save results to `/tmp/results/`
+
+---
+
 ## Datasets to Test
 1. **gist** - 1M vectors, 960D
 2. **glove** - 1.2M vectors, 100D
@@ -27,31 +43,19 @@ git checkout 2.x
 cargo build --release --bin bench_cohere_ondemand
 ```
 
-### 4. Verify Data Location
-Ensure all datasets are in HDFC at `/data` with structure:
+### 4. Run Complete Setup (Automated)
+
+**Option A: Download, convert, and test everything:**
+```bash
+./setup_and_test_ec2.sh
 ```
-/data/
-├── gist/
-│   ├── base.bin
-│   ├── query.bin
-│   └── groundtruth.bin
-├── glove/
-│   ├── base.bin
-│   ├── query.bin
-│   └── groundtruth.bin
-├── mpnet-msmarco/
-│   ├── base.bin
-│   ├── query.bin
-│   └── groundtruth.bin
-├── tasb-msmarco/
-│   ├── base.bin
-│   ├── query.bin
-│   └── groundtruth.bin
-└── snowflake-msmarco/
-    ├── base.bin
-    ├── query.bin
-    └── groundtruth.bin
+
+**Option B: Manual setup (if data already exists):**
+```bash
+# Skip to "Running Tests" section below
 ```
+
+---
 
 ## Running Tests
 
