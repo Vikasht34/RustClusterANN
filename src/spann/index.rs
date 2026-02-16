@@ -77,6 +77,8 @@ pub struct SPANNIndex {
     // Storage metadata (for on-demand loading)
     list_infos: Vec<crate::spann::storage::ListInfo>,
     index_path: Option<String>,
+    enable_compression: bool,
+    enable_delta: bool,
     
     // On-demand mode flag
     on_demand_mode: bool,
@@ -107,6 +109,8 @@ impl SPANNIndex {
             hbc_sample_size: Some(100_000), // Sample 100K for HBC (PlanetScale approach)
             list_infos: Vec::new(),
             index_path: None,
+            enable_compression: false,
+            enable_delta: false,
             on_demand_mode: false,
             dim: 0,
             enable_rearrangement: false,
@@ -414,10 +418,19 @@ impl SPANNIndex {
         // Step 4: Parse posting lists and collect candidates with vectors
         let mut seen = HashSet::new();
         let mut candidates = Vec::new();
+        let enable_delta = storage.is_delta_enabled();
         
         for (posting_idx, data) in posting_data.iter().enumerate() {
             let list_info = &storage.list_infos[posting_ids[posting_idx]];
             let count = list_info.ele_count as usize;
+            let head_id = posting_ids[posting_idx];
+            
+            // Get head vector for delta decoding
+            let head_vec: &[f32] = if enable_delta {
+                &self.head_index.get_data()[head_id]
+            } else {
+                &[]
+            };
             
             // Parse: [vec_id (u32), vec_id (u32), ..., vector data (f32)...]
             let mut cursor = 0;
@@ -438,7 +451,7 @@ impl SPANNIndex {
                 cursor += 4;
             }
             
-            // Read vectors (full precision f32)
+            // Read vectors (full precision f32 or delta-encoded)
             for &vec_id in &vec_ids {
                 if !seen.insert(vec_id) {
                     cursor += self.dim * 4;
@@ -460,6 +473,13 @@ impl SPANNIndex {
                     ]);
                     vec.push(val);
                     cursor += 4;
+                }
+                
+                // Decode delta if enabled
+                if enable_delta {
+                    for i in 0..self.dim {
+                        vec[i] += head_vec[i];
+                    }
                 }
                 
                 // Compute distance
@@ -510,6 +530,7 @@ impl SPANNIndex {
             "num_heads_to_search": self.num_heads_to_search,
             "enable_compression": enable_compression,
             "enable_delta": enable_delta,
+            "dim": self.dim,
         });
         std::fs::write(meta_path, serde_json::to_string_pretty(&meta)?)?;
         
@@ -558,7 +579,9 @@ impl SPANNIndex {
         }
         
         let num_heads = head_index.len();
-        let dim = if num_heads > 0 { head_index.get_data()[0].len() } else { 0 };
+        let dim = meta["dim"].as_u64().unwrap_or(if num_heads > 0 { head_index.get_data()[0].len() as u64 } else { 0 }) as usize;
+        let enable_compression = meta["enable_compression"].as_bool().unwrap_or(false);
+        let enable_delta = meta["enable_delta"].as_bool().unwrap_or(false);
         
         println!("Loaded head index with {} vectors", num_heads);
         
@@ -592,6 +615,8 @@ impl SPANNIndex {
             hbc_sample_size: Some(100_000),
             list_infos,
             index_path: Some(path.to_string()),
+            enable_compression,
+            enable_delta,
             on_demand_mode: on_demand,
             dim,
             enable_rearrangement: false,
@@ -605,7 +630,8 @@ impl SPANNIndex {
             Some(crate::spann::OptimizedAsyncStorage::new(
                 path.clone(),
                 self.list_infos.clone(),
-                true, // enable compression
+                self.enable_compression,
+                self.enable_delta,
             ))
         } else {
             None

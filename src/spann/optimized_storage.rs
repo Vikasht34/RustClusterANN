@@ -12,11 +12,12 @@ pub struct OptimizedAsyncStorage {
     path: String,
     pub list_infos: Arc<Vec<ListInfo>>,
     enable_compression: bool,
+    enable_delta: bool,
     enable_direct_io: bool,
 }
 
 impl OptimizedAsyncStorage {
-    pub fn new(path: String, list_infos: Vec<ListInfo>, enable_compression: bool) -> Self {
+    pub fn new(path: String, list_infos: Vec<ListInfo>, enable_compression: bool, enable_delta: bool) -> Self {
         // Enable Direct I/O on Linux (offsets are now properly aligned)
         let enable_direct_io = cfg!(target_os = "linux");
         
@@ -24,8 +25,13 @@ impl OptimizedAsyncStorage {
             path,
             list_infos: Arc::new(list_infos),
             enable_compression,
+            enable_delta,
             enable_direct_io,
         }
+    }
+    
+    pub fn is_delta_enabled(&self) -> bool {
+        self.enable_delta
     }
 
     /// Open file with Direct I/O if available

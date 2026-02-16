@@ -126,7 +126,7 @@ async fn main() {
         let start = Instant::now();
         let mut index = SPANNIndex::new();
         index.set_metric(DistanceMetric::InnerProduct);
-        index.set_hbc_sample_size(None);  // Use ALL vectors for HBC (no sampling)
+        index.set_hbc_sample_size(Some(200_000));  // 20% sampling (same as in-memory)
         index.set_quantization(quantization);
         index.build(base);
         let build_time = start.elapsed();
