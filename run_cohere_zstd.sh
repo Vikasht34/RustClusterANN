@@ -5,28 +5,32 @@
 
 set -e
 
-DATA_PATH="/home/ubuntu/data"
-INDEX_PATH="/home/ubuntu/cohere_zstd.idx"
-BINARY="./target/release/bench_cohere_1bit"
+DATA_DIR="/data"
+OUTPUT_DIR="/data/results/cohere_zstd"
+INDEX_DIR="/nvme/indexes/cohere_zstd"
+
+mkdir -p "$OUTPUT_DIR"
+mkdir -p "$INDEX_DIR"
 
 echo "=== Cohere 1M with zstd + delta compression ==="
-echo "Data path: $DATA_PATH"
-echo "Index path: $INDEX_PATH"
-echo ""
+echo "Data directory: $DATA_DIR"
+echo "Output directory: $OUTPUT_DIR"
+echo "Index directory: $INDEX_DIR"
+echo "Started at: $(date)"
 
-# Build if needed
-if [ ! -f "$BINARY" ]; then
-    echo "Building benchmark..."
-    cargo build --release --bin bench_cohere_1bit
-fi
+cd /RustClusterANN
 
-# Run benchmark
-echo "Running benchmark..."
-$BINARY \
-    --data-path "$DATA_PATH" \
-    --index-path "$INDEX_PATH" \
-    --zstd \
-    --delta
+# Build release binary
+cargo build --release --bin bench_cohere_1bit
 
-echo ""
-echo "=== Benchmark complete ==="
+# Run benchmark with zstd + delta
+./target/release/bench_cohere_1bit \
+  --data-path "$DATA_DIR" \
+  --index-path "$INDEX_DIR/cohere_1m_zstd.idx" \
+  --zstd \
+  --delta \
+  2>&1 | tee "$OUTPUT_DIR/cohere_zstd_benchmark_$(date +%Y%m%d_%H%M%S).log"
+
+echo "Completed at: $(date)"
+echo "Results saved to: $OUTPUT_DIR"
+echo "Index saved to: $INDEX_DIR"
