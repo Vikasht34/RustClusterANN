@@ -78,9 +78,16 @@ async fn main() {
         "sift1m_ondemand.idx".to_string()
     };
     
-    let enable_compression = args.contains(&"--enable-compression".to_string());
+    let enable_zstd = args.contains(&"--zstd".to_string());
+    let enable_delta = args.contains(&"--delta".to_string());
+    let enable_rearrange = args.contains(&"--rearrange".to_string());
     
-    println!("=== SIFT 1M On-Demand Loading Benchmark ===\n");
+    println!("=== SIFT 1M On-Demand Loading Benchmark ===");
+    println!("Optimizations:");
+    println!("  SIMD delta: {}", if enable_delta { "✅" } else { "❌" });
+    println!("  Zstd compression: {}", if enable_zstd { "✅" } else { "❌" });
+    println!("  Posting rearrangement: {}", if enable_rearrange { "✅" } else { "❌" });
+    println!();
     
     // Load data
     println!("Loading SIFT 1M dataset...");
@@ -95,14 +102,20 @@ async fn main() {
     let start = Instant::now();
     let mut index = SPANNIndex::new();
     index.set_metric(DistanceMetric::L2);
+    
+    // Enable optimizations
+    if enable_rearrange {
+        index.enable_optimizations(true, false);
+    }
+    
     index.build(base);
     let build_time = start.elapsed();
     println!("Build time: {:.2}s\n", build_time.as_secs_f32());
     
-    // Save index
+    // Save index with optimizations
     println!("Saving index to: {}", index_path);
     let start = Instant::now();
-    index.save(&index_path, enable_compression, false).unwrap();
+    index.save(&index_path, enable_zstd, enable_delta).unwrap();
     println!("  Save time: {:.2}s", start.elapsed().as_secs_f32());
     let size = std::fs::metadata(&index_path).unwrap().len();
     println!("  File size: {:.2} MB\n", size as f32 / 1024.0 / 1024.0);
@@ -144,8 +157,7 @@ async fn main() {
     println!("Expected candidates per query: ~{} (64 heads × {} avg)", 64 * avg_size, avg_size);
     
     println!("\n=== On-Demand Search Benchmark ===");
-    println!("Only head index in RAM, posting lists + vectors loaded per query");
-    println!("Using maxCheck = {} (SPTAG default)\n", max_check);
+    println!("Only head index in RAM, posting lists + vectors loaded per query\n");
     
     // Search with on-demand loading
     let start = Instant::now();
@@ -154,7 +166,7 @@ async fn main() {
     
     for (i, query) in queries.iter().enumerate() {
         let query_start = Instant::now();
-        let results = loaded_index.search_async(query, 10, &storage, max_check).await.unwrap();
+        let results = loaded_index.search_async(query, 10, &storage).await.unwrap();
         latencies.push(query_start.elapsed().as_secs_f64() * 1000.0);
         
         let gt = &ground_truth[i];
