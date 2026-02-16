@@ -231,4 +231,69 @@ impl RNGGraph {
     pub fn get_neighbors(&self, node: usize) -> &[usize] {
         &self.neighbors[node]
     }
+    
+    /// Save graph to binary format
+    pub fn save(&self, writer: &mut dyn std::io::Write) -> std::io::Result<()> {
+        use std::io::Write;
+        
+        // Write parameters
+        writer.write_all(&(self.max_degree as u32).to_le_bytes())?;
+        writer.write_all(&self.rng_factor.to_le_bytes())?;
+        writer.write_all(&(self.cef as u32).to_le_bytes())?;
+        
+        // Write neighbors
+        let num_nodes = self.neighbors.len() as u32;
+        writer.write_all(&num_nodes.to_le_bytes())?;
+        
+        for neighbors in &self.neighbors {
+            let count = neighbors.len() as u32;
+            writer.write_all(&count.to_le_bytes())?;
+            for &neighbor in neighbors {
+                writer.write_all(&(neighbor as u32).to_le_bytes())?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Load graph from binary format
+    pub fn load(reader: &mut dyn std::io::Read) -> std::io::Result<Self> {
+        use std::io::Read;
+        
+        let mut buf = [0u8; 4];
+        
+        // Read parameters
+        reader.read_exact(&mut buf)?;
+        let max_degree = u32::from_le_bytes(buf) as usize;
+        
+        reader.read_exact(&mut buf)?;
+        let rng_factor = f32::from_le_bytes(buf);
+        
+        reader.read_exact(&mut buf)?;
+        let cef = u32::from_le_bytes(buf) as usize;
+        
+        // Read neighbors
+        reader.read_exact(&mut buf)?;
+        let num_nodes = u32::from_le_bytes(buf) as usize;
+        
+        let mut neighbors = Vec::with_capacity(num_nodes);
+        for _ in 0..num_nodes {
+            reader.read_exact(&mut buf)?;
+            let count = u32::from_le_bytes(buf) as usize;
+            
+            let mut node_neighbors = Vec::with_capacity(count);
+            for _ in 0..count {
+                reader.read_exact(&mut buf)?;
+                node_neighbors.push(u32::from_le_bytes(buf) as usize);
+            }
+            neighbors.push(node_neighbors);
+        }
+        
+        Ok(Self {
+            neighbors,
+            max_degree,
+            rng_factor,
+            cef,
+        })
+    }
 }

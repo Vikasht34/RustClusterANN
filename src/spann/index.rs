@@ -483,23 +483,9 @@ impl SPANNIndex {
         let mut storage = crate::spann::SPANNStorage::new();
         storage.save(&self.postings, &self.full_vectors, path, enable_compression, enable_delta, save_quantized)?;
         
-        // Save head vectors separately (always full precision for accurate routing)
-        let head_path = format!("{}.heads", path);
-        let mut head_file = std::fs::File::create(&head_path)?;
-        let num_heads = self.postings.len();
-        let dim = if !self.full_vectors.is_empty() { self.full_vectors[0].len() } else { 0 };
-        
-        head_file.write_all(&(num_heads as u32).to_le_bytes())?;
-        head_file.write_all(&(dim as u32).to_le_bytes())?;
-        
-        for posting in &self.postings {
-            let head_id = posting.head_id;
-            if head_id < self.full_vectors.len() {
-                for &val in &self.full_vectors[head_id] {
-                    head_file.write_all(&val.to_le_bytes())?;
-                }
-            }
-        }
+        // Save head index (BKT structure) separately
+        let head_path = format!("{}.head_index", path);
+        self.head_index.save(&head_path)?;
         
         // Save metadata
         let meta_path = format!("{}.meta", path);
@@ -557,44 +543,20 @@ impl SPANNIndex {
             _ => QuantizationType::None,
         };
         
-        // Load head vectors from separate file
-        let head_path = format!("{}.heads", path);
-        let mut head_file = std::fs::File::open(&head_path)?;
+        // Load head index (BKT structure) directly
+        let head_path = format!("{}.head_index", path);
+        let head_index = SPTAGBKTIndex::load(&head_path)?;
         
-        let mut num_heads_bytes = [0u8; 4];
-        head_file.read_exact(&mut num_heads_bytes)?;
-        let num_heads = u32::from_le_bytes(num_heads_bytes) as usize;
-        
-        let mut dim_bytes = [0u8; 4];
-        head_file.read_exact(&mut dim_bytes)?;
-        let dim = u32::from_le_bytes(dim_bytes) as usize;
-        
-        let mut head_vectors = Vec::with_capacity(num_heads);
-        for _ in 0..num_heads {
-            let mut vec = vec![0.0f32; dim];
-            for val in vec.iter_mut() {
-                let mut bytes = [0u8; 4];
-                head_file.read_exact(&mut bytes)?;
-                *val = f32::from_le_bytes(bytes);
-            }
-            head_vectors.push(vec);
-        }
-        
-        // Rebuild head index from head vectors (fast - only 29K vectors)
+        // Extract head_id_map from postings
         let mut head_id_map = Vec::new();
         for posting in &postings {
             head_id_map.push(posting.head_id);
         }
         
-        let num_heads = head_vectors.len();
-        let mut head_index = SPTAGBKTIndex::new(32, 2000, 32, 1.0, 500, 32);
+        let num_heads = head_index.len();
+        let dim = if num_heads > 0 { head_index.get_data()[0].len() } else { 0 };
         
-        // Build head index quietly (takes ~5 seconds for 29K vectors)
-        print!("Rebuilding head index from {} vectors... ", num_heads);
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-        head_index.build_quiet(head_vectors, 2);
-        println!("done");
-        println!();
+        println!("Loaded head index with {} vectors", num_heads);
         
         // In on-demand mode, clear posting lists and vectors to save memory
         let (postings, full_vectors) = if on_demand {

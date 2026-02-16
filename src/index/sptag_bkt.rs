@@ -202,4 +202,83 @@ impl SPTAGBKTIndex {
     pub fn get_data(&self) -> &[Vec<f32>] {
         &self.data
     }
+    
+    /// Save index to file
+    pub fn save(&self, path: &str) -> std::io::Result<()> {
+        use std::fs::File;
+        use std::io::Write;
+        
+        let mut file = File::create(path)?;
+        
+        // Save tree
+        self.tree.save(&mut file)?;
+        
+        // Save graph
+        self.graph.save(&mut file)?;
+        
+        // Save data
+        let num_vecs = self.data.len() as u32;
+        file.write_all(&num_vecs.to_le_bytes())?;
+        
+        if num_vecs > 0 {
+            let dim = self.data[0].len() as u32;
+            file.write_all(&dim.to_le_bytes())?;
+            
+            for vec in &self.data {
+                for &val in vec {
+                    file.write_all(&val.to_le_bytes())?;
+                }
+            }
+        }
+        
+        // Save num_trees
+        file.write_all(&(self.num_trees as u32).to_le_bytes())?;
+        
+        Ok(())
+    }
+    
+    /// Load index from file
+    pub fn load(path: &str) -> std::io::Result<Self> {
+        use std::fs::File;
+        use std::io::Read;
+        
+        let mut file = File::open(path)?;
+        
+        // Load tree
+        let tree = BKTreeBuilder::load(&mut file)?;
+        
+        // Load graph
+        let graph = RNGGraph::load(&mut file)?;
+        
+        // Load data
+        let mut buf = [0u8; 4];
+        file.read_exact(&mut buf)?;
+        let num_vecs = u32::from_le_bytes(buf) as usize;
+        
+        let mut data = Vec::with_capacity(num_vecs);
+        if num_vecs > 0 {
+            file.read_exact(&mut buf)?;
+            let dim = u32::from_le_bytes(buf) as usize;
+            
+            for _ in 0..num_vecs {
+                let mut vec = Vec::with_capacity(dim);
+                for _ in 0..dim {
+                    file.read_exact(&mut buf)?;
+                    vec.push(f32::from_le_bytes(buf));
+                }
+                data.push(vec);
+            }
+        }
+        
+        // Load num_trees
+        file.read_exact(&mut buf)?;
+        let num_trees = u32::from_le_bytes(buf) as usize;
+        
+        Ok(Self {
+            tree,
+            graph,
+            data,
+            num_trees,
+        })
+    }
 }

@@ -293,4 +293,126 @@ impl BKTreeBuilder {
         results.truncate(k);
         results
     }
+    
+    /// Save BKTree structure to binary format (SPTAG-compatible)
+    pub fn save(&self, writer: &mut dyn std::io::Write) -> std::io::Result<()> {
+        use std::io::Write;
+        
+        // Write number of nodes
+        let num_nodes = self.nodes.len() as u32;
+        writer.write_all(&num_nodes.to_le_bytes())?;
+        
+        // Write nodes
+        for node in &self.nodes {
+            writer.write_all(&node.center_id.to_le_bytes())?;
+            writer.write_all(&node.child_start.to_le_bytes())?;
+            writer.write_all(&node.child_end.to_le_bytes())?;
+            writer.write_all(&(node.data_start as u32).to_le_bytes())?;
+            writer.write_all(&(node.data_end as u32).to_le_bytes())?;
+        }
+        
+        // Write indices
+        let num_indices = self.indices.len() as u32;
+        writer.write_all(&num_indices.to_le_bytes())?;
+        for &idx in &self.indices {
+            writer.write_all(&(idx as u32).to_le_bytes())?;
+        }
+        
+        // Write leaves
+        let num_leaves = self.leaves.len() as u32;
+        writer.write_all(&num_leaves.to_le_bytes())?;
+        for &(start, end) in &self.leaves {
+            writer.write_all(&(start as u32).to_le_bytes())?;
+            writer.write_all(&(end as u32).to_le_bytes())?;
+        }
+        
+        // Write parameters
+        writer.write_all(&(self.k as u32).to_le_bytes())?;
+        writer.write_all(&(self.leaf_size as u32).to_le_bytes())?;
+        writer.write_all(&(self.samples as u32).to_le_bytes())?;
+        writer.write_all(&self.lambda.to_le_bytes())?;
+        
+        Ok(())
+    }
+    
+    /// Load BKTree structure from binary format
+    pub fn load(reader: &mut dyn std::io::Read) -> std::io::Result<Self> {
+        use std::io::Read;
+        
+        // Read number of nodes
+        let mut buf = [0u8; 4];
+        reader.read_exact(&mut buf)?;
+        let num_nodes = u32::from_le_bytes(buf) as usize;
+        
+        // Read nodes
+        let mut nodes = Vec::with_capacity(num_nodes);
+        for _ in 0..num_nodes {
+            reader.read_exact(&mut buf)?;
+            let center_id = i32::from_le_bytes(buf);
+            
+            reader.read_exact(&mut buf)?;
+            let child_start = i32::from_le_bytes(buf);
+            
+            reader.read_exact(&mut buf)?;
+            let child_end = i32::from_le_bytes(buf);
+            
+            reader.read_exact(&mut buf)?;
+            let data_start = u32::from_le_bytes(buf) as usize;
+            
+            reader.read_exact(&mut buf)?;
+            let data_end = u32::from_le_bytes(buf) as usize;
+            
+            nodes.push(BKTNode {
+                center_id,
+                child_start,
+                child_end,
+                data_start,
+                data_end,
+            });
+        }
+        
+        // Read indices
+        reader.read_exact(&mut buf)?;
+        let num_indices = u32::from_le_bytes(buf) as usize;
+        let mut indices = Vec::with_capacity(num_indices);
+        for _ in 0..num_indices {
+            reader.read_exact(&mut buf)?;
+            indices.push(u32::from_le_bytes(buf) as usize);
+        }
+        
+        // Read leaves
+        reader.read_exact(&mut buf)?;
+        let num_leaves = u32::from_le_bytes(buf) as usize;
+        let mut leaves = Vec::with_capacity(num_leaves);
+        for _ in 0..num_leaves {
+            reader.read_exact(&mut buf)?;
+            let start = u32::from_le_bytes(buf) as usize;
+            reader.read_exact(&mut buf)?;
+            let end = u32::from_le_bytes(buf) as usize;
+            leaves.push((start, end));
+        }
+        
+        // Read parameters
+        reader.read_exact(&mut buf)?;
+        let k = u32::from_le_bytes(buf) as usize;
+        
+        reader.read_exact(&mut buf)?;
+        let leaf_size = u32::from_le_bytes(buf) as usize;
+        
+        reader.read_exact(&mut buf)?;
+        let samples = u32::from_le_bytes(buf) as usize;
+        
+        reader.read_exact(&mut buf)?;
+        let lambda = f32::from_le_bytes(buf);
+        
+        Ok(Self {
+            nodes,
+            indices,
+            leaves,
+            k,
+            leaf_size,
+            samples,
+            lambda,
+        })
+    }
 }
