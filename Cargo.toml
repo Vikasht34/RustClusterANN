@@ -10,25 +10,22 @@ path = "src/lib.rs"
 # Disable auto-discovery of binaries
 autobins = false
 
+# Only enable working binaries needed for benchmarks
 [[bin]]
-name = "bench_sift_storage"
-path = "src/bin/bench_sift_storage.rs"
+name = "bench_cohere_ondemand"
+path = "src/bin/bench_cohere_ondemand.rs"
 
 [[bin]]
-name = "bench_cohere1m"
-path = "src/bin/bench_cohere1m.rs"
-
-[[bin]]
-name = "bench_sift_1bit"
-path = "src/bin/bench_sift_1bit.rs"
+name = "bench_sift_ondemand"
+path = "src/bin/bench_sift_ondemand.rs"
 
 [[bin]]
 name = "bench_cohere_1bit"
 path = "src/bin/bench_cohere_1bit.rs"
 
 [[bin]]
-name = "bench_sift_ondemand"
-path = "src/bin/bench_sift_ondemand.rs"
+name = "bench_sift_1bit"
+path = "src/bin/bench_sift_1bit.rs"
 
 [dependencies]
 rand = "0.8"
