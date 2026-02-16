@@ -23,13 +23,13 @@ cd /RustClusterANN
 # Build release binary
 cargo build --release --bin bench_cohere_1bit
 
-# Run benchmark with zstd + delta
+# Run benchmark with zstd + delta (no quantization)
 ./target/release/bench_cohere_1bit \
   --data-path "$DATA_DIR" \
-  --index-path "$INDEX_DIR/cohere_1m_zstd.idx" \
+  --index-path "$INDEX_DIR/cohere_1m_no_quant.idx" \
   --zstd \
   --delta \
-  2>&1 | tee "$OUTPUT_DIR/cohere_zstd_benchmark_$(date +%Y%m%d_%H%M%S).log"
+  2>&1 | tee "$OUTPUT_DIR/cohere_no_quant_benchmark_$(date +%Y%m%d_%H%M%S).log"
 
 echo "Completed at: $(date)"
 echo "Results saved to: $OUTPUT_DIR"
