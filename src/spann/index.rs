@@ -153,6 +153,7 @@ impl SPANNIndex {
         println!("Using {:.0}% heads (SPTAG default)", self.ratio * 100.0);
         
         self.full_vectors = vectors;
+        self.dim = if !self.full_vectors.is_empty() { self.full_vectors[0].len() } else { 0 };
         
         // Phase 1: Select heads using HBC
         println!("\nPhase 1: Selecting heads (HBC)...");
@@ -420,6 +421,10 @@ impl SPANNIndex {
         let mut candidates = Vec::new();
         let enable_delta = storage.is_delta_enabled();
         
+        // Reusable buffers
+        let mut vec_buffer = vec![0.0f32; self.dim];
+        let mut delta_buffer = vec![0.0f32; self.dim];
+        
         for (posting_idx, data) in posting_data.iter().enumerate() {
             let list_info = &storage.list_infos[posting_ids[posting_idx]];
             let count = list_info.ele_count as usize;
@@ -462,29 +467,22 @@ impl SPANNIndex {
                     break;
                 }
                 
-                // Extract vector
-                let mut vec = Vec::with_capacity(self.dim);
-                for _ in 0..self.dim {
-                    let val = f32::from_le_bytes([
-                        data[cursor],
-                        data[cursor + 1],
-                        data[cursor + 2],
-                        data[cursor + 3],
-                    ]);
-                    vec.push(val);
-                    cursor += 4;
+                // Fast parse: chunks_exact for f32 conversion
+                let vec_slice = &data[cursor..cursor + self.dim * 4];
+                for (i, chunk) in vec_slice.chunks_exact(4).enumerate() {
+                    vec_buffer[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
                 }
+                cursor += self.dim * 4;
                 
-                // Decode delta if enabled
+                // Decode delta if enabled (SIMD optimized)
                 if enable_delta {
-                    for i in 0..self.dim {
-                        vec[i] += head_vec[i];
-                    }
+                    crate::spann::simd_delta::decode_delta_simd(&vec_buffer, head_vec, &mut delta_buffer);
+                    let dist = self.compute_distance(query, &delta_buffer);
+                    candidates.push((vec_id, dist));
+                } else {
+                    let dist = self.compute_distance(query, &vec_buffer);
+                    candidates.push((vec_id, dist));
                 }
-                
-                // Compute distance
-                let dist = self.compute_distance(query, &vec);
-                candidates.push((vec_id, dist));
             }
         }
         
