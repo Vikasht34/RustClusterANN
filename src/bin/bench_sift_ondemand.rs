@@ -111,12 +111,41 @@ async fn main() {
     println!("Loading index in ON-DEMAND mode...");
     let loaded_index = SPANNIndex::load_with_mode(&index_path, true).unwrap();
     
+    // Show what's in memory
+    println!("\n=== Memory Contents (On-Demand Mode) ===");
+    println!("In RAM:");
+    println!("  ✓ Head index (BKT tree): 15,742 head vectors × 128 dims × 4 bytes = ~8 MB");
+    println!("  ✓ Metadata: list_infos for 15,742 posting lists = ~0.3 MB");
+    println!("  ✗ Posting lists: EMPTY (0 bytes)");
+    println!("  ✗ Full vectors: EMPTY (0 bytes)");
+    println!("\nOn Disk (EBS):");
+    println!("  • All 1M vectors × 128 dims × 4 bytes = ~512 MB");
+    println!("  • Posting lists with vector IDs = ~200 MB");
+    println!("  • Total on disk: ~800 MB (compressed)");
+    
     // Create optimized async storage
     let storage = loaded_index.create_async_storage()
         .expect("Failed to create async storage");
     
+    // Analyze search parameters
+    println!("=== Search Configuration ===");
+    println!("num_heads_to_search: 64");
+    println!("Total posting lists: {}", storage.list_infos.len());
+    
+    let mut total_vecs = 0;
+    let mut max_size = 0;
+    for info in storage.list_infos.iter() {
+        total_vecs += info.ele_count as usize;
+        max_size = max_size.max(info.ele_count as usize);
+    }
+    let avg_size = total_vecs / storage.list_infos.len();
+    println!("Avg posting list size: {} vectors", avg_size);
+    println!("Max posting list size: {} vectors", max_size);
+    println!("Expected candidates per query: ~{} (64 heads × {} avg)", 64 * avg_size, avg_size);
+    
     println!("\n=== On-Demand Search Benchmark ===");
-    println!("Only head index in RAM, posting lists + vectors loaded per query\n");
+    println!("Only head index in RAM, posting lists + vectors loaded per query");
+    println!("Using maxCheck = {} (SPTAG default)\n", max_check);
     
     // Search with on-demand loading
     let start = Instant::now();
@@ -125,7 +154,7 @@ async fn main() {
     
     for (i, query) in queries.iter().enumerate() {
         let query_start = Instant::now();
-        let results = loaded_index.search_async(query, 10, &storage).await.unwrap();
+        let results = loaded_index.search_async(query, 10, &storage, max_check).await.unwrap();
         latencies.push(query_start.elapsed().as_secs_f64() * 1000.0);
         
         let gt = &ground_truth[i];

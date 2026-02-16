@@ -41,6 +41,14 @@ impl MultiBitQuantizer {
             n_vectors: 0,
         }
     }
+    
+    pub fn bits(&self) -> usize {
+        self.bits
+    }
+    
+    pub fn set_binary_codes(&mut self, codes: Vec<u8>) {
+        self.binary_codes = codes;
+    }
 
     pub fn train(&mut self, vectors: &[Vec<f32>], metric: MetricType) {
         self.dim = vectors[0].len();
@@ -338,6 +346,118 @@ impl MultiBitQuantizer {
             let total_code = code as f32 + if self.ex_signs[ex_offset + d] > 0 { 1 << ex_bits } else { 0 } as f32;
             
             result[d] += sign * total_code * self.f_rescale_ex[idx];
+        }
+        
+        result
+    }
+    
+    /// Get all quantized codes as a single byte vector
+    pub fn get_all_codes(&self) -> Vec<u8> {
+        self.binary_codes.clone()
+    }
+    
+    /// Get the centroid
+    pub fn get_centroid(&self) -> &[f32] {
+        &self.centroid
+    }
+    
+    /// Serialize metadata needed for distance computation
+    pub fn serialize_metadata(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        
+        // Write dimensions
+        buf.extend_from_slice(&(self.dim as u32).to_le_bytes());
+        buf.extend_from_slice(&(self.bits as u32).to_le_bytes());
+        buf.extend_from_slice(&(self.n_vectors as u32).to_le_bytes());
+        
+        // Write centroid
+        for &val in &self.centroid {
+            buf.extend_from_slice(&val.to_le_bytes());
+        }
+        
+        // Write per-vector factors
+        for &val in &self.f_add_ex {
+            buf.extend_from_slice(&val.to_le_bytes());
+        }
+        for &val in &self.f_rescale_ex {
+            buf.extend_from_slice(&val.to_le_bytes());
+        }
+        
+        // Write ex_codes and ex_signs
+        buf.extend_from_slice(&self.ex_codes);
+        buf.extend_from_slice(unsafe {
+            std::slice::from_raw_parts(self.ex_signs.as_ptr() as *const u8, self.ex_signs.len())
+        });
+        
+        buf
+    }
+    
+    /// Deserialize metadata
+    pub fn deserialize_metadata(data: &[u8]) -> (Self, usize) {
+        let mut cursor = 0;
+        
+        let dim = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        let bits = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+        let n_vectors = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
+        cursor += 12;
+        
+        // Read centroid
+        let mut centroid = Vec::with_capacity(dim);
+        for _ in 0..dim {
+            let val = f32::from_le_bytes([data[cursor], data[cursor+1], data[cursor+2], data[cursor+3]]);
+            centroid.push(val);
+            cursor += 4;
+        }
+        
+        // Read per-vector factors
+        let mut f_add_ex = Vec::with_capacity(n_vectors);
+        let mut f_rescale_ex = Vec::with_capacity(n_vectors);
+        for _ in 0..n_vectors {
+            let val = f32::from_le_bytes([data[cursor], data[cursor+1], data[cursor+2], data[cursor+3]]);
+            f_add_ex.push(val);
+            cursor += 4;
+        }
+        for _ in 0..n_vectors {
+            let val = f32::from_le_bytes([data[cursor], data[cursor+1], data[cursor+2], data[cursor+3]]);
+            f_rescale_ex.push(val);
+            cursor += 4;
+        }
+        
+        // Read ex_codes and ex_signs
+        let ex_size = n_vectors * dim;
+        let ex_codes = data[cursor..cursor + ex_size].to_vec();
+        cursor += ex_size;
+        let ex_signs = data[cursor..cursor + ex_size].iter().map(|&b| b as i8).collect();
+        cursor += ex_size;
+        
+        let quantizer = MultiBitQuantizer {
+            dim,
+            bits,
+            centroid,
+            binary_codes: Vec::new(), // Will be populated separately
+            ex_codes,
+            ex_signs,
+            f_add_ex,
+            f_rescale_ex,
+            n_vectors,
+        };
+        
+        (quantizer, cursor)
+    }
+    
+    /// Quantize a single query vector (NOT NEEDED - RaBitQ uses ADC)
+    /// Keeping for reference but should not be used
+    #[allow(dead_code)]
+    pub fn quantize_query(&self, query: &[f32]) -> Vec<u8> {
+        let bytes_per_vec = (self.dim + 7) / 8;
+        let mut result = vec![0u8; bytes_per_vec];
+        
+        // Compute residual
+        for d in 0..self.dim {
+            let residual = query[d] - self.centroid[d];
+            if residual >= 0.0 {
+                result[d / 8] |= 1 << (d % 8);
+            }
         }
         
         result

@@ -4,6 +4,7 @@ use crate::index::sptag_bkt::SPTAGBKTIndex;
 use crate::spann::hbc::HBCSelector;
 use crate::simd;
 use crate::multibit::{MultiBitQuantizer, MetricType as QuantMetric};
+use std::io::{Read, Write};
 
 #[derive(Clone, Copy)]
 pub enum DistanceMetric {
@@ -264,6 +265,9 @@ impl SPANNIndex {
             let mut quantizer = MultiBitQuantizer::new(bits);
             quantizer.train(&vectors, quant_metric);
             
+            // Extract quantized codes
+            let quantized_data = quantizer.get_all_codes();
+            
             // Estimate compressed size (bits per vector)
             let bytes_per_vector = match bits {
                 1 => (dim + 7) / 8,  // 1 bit per dimension
@@ -273,6 +277,7 @@ impl SPANNIndex {
             };
             total_quantized_bytes += (vectors.len() * bytes_per_vector) as u64;
             
+            posting.quantized_data = Some(quantized_data);
             posting.quantizer = Some(quantizer);
         }
         
@@ -288,27 +293,38 @@ impl SPANNIndex {
         // Step 1: Search head index
         let head_results = self.head_index.search(query, self.num_heads_to_search, 500);
         
-        // Step 2: Collect candidates from posting lists with deduplication
-        let mut seen = HashSet::new();
-        let mut candidates = Vec::new();
+        // Step 2 & 3: Collect candidates and compute distances
+        let mut results: Vec<(usize, f32)> = Vec::new();
+        let quant_metric = match self.metric {
+            DistanceMetric::L2 => crate::multibit::MetricType::L2,
+            DistanceMetric::InnerProduct => crate::multibit::MetricType::IP,
+        };
         
         for (head_idx, _) in head_results {
-            if head_idx < self.postings.len() {
-                for &vec_id in &self.postings[head_idx].vector_ids {
-                    if seen.insert(vec_id) {
-                        candidates.push(vec_id);
+            if head_idx >= self.postings.len() {
+                continue;
+            }
+            
+            let posting = &self.postings[head_idx];
+            
+            // Use quantized distances if available, otherwise full precision
+            if let (Some(ref quantizer), Some(_)) = (&posting.quantizer, &posting.quantized_data) {
+                // Quantized distance computation
+                let distances = quantizer.compute_distances(query, quant_metric);
+                for (i, &vec_id) in posting.vector_ids.iter().enumerate() {
+                    if i < distances.len() {
+                        results.push((vec_id, distances[i]));
                     }
                 }
-            }
-        }
-        
-        // Step 3: Rerank with exact distances (always full precision)
-        let mut results: Vec<(usize, f32)> = Vec::new();
-        for vec_id in candidates {
-            if vec_id < self.full_vectors.len() {
-                let vec_ref: &Vec<f32> = &self.full_vectors[vec_id];
-                let dist = self.compute_distance(query, vec_ref);
-                results.push((vec_id, dist));
+            } else {
+                // Full precision distance computation
+                for &vec_id in &posting.vector_ids {
+                    if vec_id < self.full_vectors.len() {
+                        let vec_ref = &self.full_vectors[vec_id];
+                        let dist = self.compute_distance(query, vec_ref);
+                        results.push((vec_id, dist));
+                    }
+                }
             }
         }
         
@@ -408,8 +424,30 @@ impl SPANNIndex {
     
     /// Save index to disk
     pub fn save(&self, path: &str, enable_compression: bool, enable_delta: bool) -> std::io::Result<()> {
+        // Determine if we should save quantized data
+        let save_quantized = self.quantization != QuantizationType::None 
+            && self.postings.iter().any(|p| p.quantized_data.is_some());
+        
         let mut storage = crate::spann::SPANNStorage::new();
-        storage.save(&self.postings, &self.full_vectors, path, enable_compression, enable_delta)?;
+        storage.save(&self.postings, &self.full_vectors, path, enable_compression, enable_delta, save_quantized)?;
+        
+        // Save head vectors separately (always full precision for accurate routing)
+        let head_path = format!("{}.heads", path);
+        let mut head_file = std::fs::File::create(&head_path)?;
+        let num_heads = self.postings.len();
+        let dim = if !self.full_vectors.is_empty() { self.full_vectors[0].len() } else { 0 };
+        
+        head_file.write_all(&(num_heads as u32).to_le_bytes())?;
+        head_file.write_all(&(dim as u32).to_le_bytes())?;
+        
+        for posting in &self.postings {
+            let head_id = posting.head_id;
+            if head_id < self.full_vectors.len() {
+                for &val in &self.full_vectors[head_id] {
+                    head_file.write_all(&val.to_le_bytes())?;
+                }
+            }
+        }
         
         // Save metadata
         let meta_path = format!("{}.meta", path);
@@ -467,14 +505,33 @@ impl SPANNIndex {
             _ => QuantizationType::None,
         };
         
-        let dim = full_vectors[0].len();
+        // Load head vectors from separate file
+        let head_path = format!("{}.heads", path);
+        let mut head_file = std::fs::File::open(&head_path)?;
         
-        // Rebuild head index
+        let mut num_heads_bytes = [0u8; 4];
+        head_file.read_exact(&mut num_heads_bytes)?;
+        let num_heads = u32::from_le_bytes(num_heads_bytes) as usize;
+        
+        let mut dim_bytes = [0u8; 4];
+        head_file.read_exact(&mut dim_bytes)?;
+        let dim = u32::from_le_bytes(dim_bytes) as usize;
+        
+        let mut head_vectors = Vec::with_capacity(num_heads);
+        for _ in 0..num_heads {
+            let mut vec = vec![0.0f32; dim];
+            for val in vec.iter_mut() {
+                let mut bytes = [0u8; 4];
+                head_file.read_exact(&mut bytes)?;
+                *val = f32::from_le_bytes(bytes);
+            }
+            head_vectors.push(vec);
+        }
+        
+        // Rebuild head index from head vectors
         let mut head_id_map = Vec::new();
-        let mut head_vectors = Vec::new();
         for posting in &postings {
             head_id_map.push(posting.head_id);
-            head_vectors.push(full_vectors[posting.head_id].clone());
         }
         
         let num_heads = head_vectors.len();

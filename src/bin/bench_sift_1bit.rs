@@ -77,9 +77,17 @@ fn main() {
         "sift1m_comp.bin".to_string()
     };
     
-    let enable_compression = args.contains(&"--enable-compression".to_string());
+    let bits = if let Some(pos) = args.iter().position(|x| x == "--bits") {
+        args[pos + 1].parse::<usize>().unwrap_or(1)
+    } else {
+        1
+    };
     
-    println!("=== SIFT 1M 1-bit Quantization Benchmark ===\n");
+    let enable_quantization = args.contains(&"--enable-compression".to_string());
+    let enable_zstd = args.contains(&"--zstd".to_string());
+    let enable_delta = args.contains(&"--delta".to_string());
+    
+    println!("=== SIFT 1M {}-bit Quantization Benchmark ===\n", bits);
     
     // Load data
     println!("Loading SIFT 1M dataset...");
@@ -90,29 +98,49 @@ fn main() {
     println!("  Queries: {} vectors", queries.len());
     println!("  Ground truth: {} vectors\n", ground_truth.len());
     
-    // Build index
-    println!("Building SPANN index with 1-bit quantization...");
-    let start = Instant::now();
-    let mut index = SPANNIndex::new();
-    index.set_metric(DistanceMetric::L2);
-    index.set_quantization(QuantizationType::OneBit);
-    index.build(base);
-    let build_time = start.elapsed();
-    println!("Build time: {:.2}s\n", build_time.as_secs_f32());
+    // Check if index exists
+    let index_exists = std::path::Path::new(&index_path).exists();
     
-    // Save index
-    println!("Saving index to: {}", index_path);
-    let start = Instant::now();
-    index.save(&index_path, enable_compression, false).unwrap();
-    println!("  Save time: {:.2}s", start.elapsed().as_secs_f32());
-    let size = std::fs::metadata(&index_path).unwrap().len();
-    println!("  File size: {:.2} MB\n", size as f32 / 1024.0 / 1024.0);
-    
-    // Load and verify
-    println!("Loading index from disk...");
-    let start = Instant::now();
-    let loaded_index = SPANNIndex::load(&index_path).unwrap();
-    println!("  Load time: {:.2}s\n", start.elapsed().as_secs_f32());
+    let loaded_index = if index_exists {
+        println!("Loading existing index from: {}", index_path);
+        let start = Instant::now();
+        let index = SPANNIndex::load(&index_path).unwrap();
+        println!("  Load time: {:.2}s\n", start.elapsed().as_secs_f32());
+        index
+    } else {
+        // Build index
+        let quantization = if enable_quantization {
+            match bits {
+                1 => QuantizationType::OneBit,
+                2 => QuantizationType::TwoBit,
+                4 => QuantizationType::FourBit,
+                _ => {
+                    eprintln!("Invalid bits: {}. Must be 1, 2, or 4", bits);
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            QuantizationType::None
+        };
+        println!("Building SPANN index with {:?} quantization...", quantization);
+        let start = Instant::now();
+        let mut index = SPANNIndex::new();
+        index.set_metric(DistanceMetric::L2);
+        index.set_quantization(quantization);
+        index.build(base);
+        let build_time = start.elapsed();
+        println!("Build time: {:.2}s\n", build_time.as_secs_f32());
+        
+        // Save index
+        println!("Saving index to: {}", index_path);
+        let start = Instant::now();
+        index.save(&index_path, enable_zstd, enable_delta).unwrap();
+        println!("  Save time: {:.2}s", start.elapsed().as_secs_f32());
+        let size = std::fs::metadata(&index_path).unwrap().len();
+        println!("  File size: {:.2} MB\n", size as f32 / 1024.0 / 1024.0);
+        
+        index
+    };
     
     // Search and verify
     println!("Search benchmark...");
@@ -144,7 +172,7 @@ fn main() {
     let p99 = latencies[latencies.len() * 99 / 100];
     
     println!("\n=== Results ===");
-    println!("Build time: {:.2}s ({:.1} min)", build_time.as_secs_f32(), build_time.as_secs_f32() / 60.0);
+    let size = std::fs::metadata(&index_path).unwrap().len();
     println!("Index size: {:.2} MB", size as f32 / 1024.0 / 1024.0);
     println!("Latency p50: {:.3} ms", p50);
     println!("Latency p90: {:.3} ms", p90);

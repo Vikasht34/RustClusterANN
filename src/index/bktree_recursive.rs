@@ -133,9 +133,13 @@ impl BKTreeBuilder {
             data_end: last,
         });
         
-        // Leaf node: store all vectors
-        if size <= self.leaf_size {
-            println!("  Depth {}: Leaf with {} vectors", depth, size);
+        // Leaf node: store all vectors (or max depth reached)
+        if size <= self.leaf_size || depth >= 50 {
+            if depth >= 50 {
+                println!("  Depth {}: Max depth reached, creating leaf with {} vectors", depth, size);
+            } else {
+                println!("  Depth {}: Leaf with {} vectors", depth, size);
+            }
             self.nodes[node_idx as usize].center_id = self.indices[first] as i32;
             self.leaves.push((first, last));
             return node_idx;

@@ -76,31 +76,52 @@ fn main() {
         "cohere_1m.idx".to_string()
     };
     
-    let enable_compression = args.contains(&"--enable-compression".to_string());
+    let bits = if let Some(pos) = args.iter().position(|x| x == "--bits") {
+        args[pos + 1].parse::<usize>().unwrap_or(1)
+    } else {
+        1
+    };
     
-    println!("=== SPANN on Cohere 1M with 1-bit Quantization ===\n");
+    let enable_quantization = args.contains(&"--enable-compression".to_string());
+    let enable_zstd = args.contains(&"--zstd".to_string());
+    let enable_delta = args.contains(&"--delta".to_string());
+    
+    println!("=== SPANN on Cohere 1M with {}-bit Quantization ===\n", bits);
 
     // Load Cohere 1M dataset
     println!("Loading Cohere 1M from: {}", data_path);
     let start = Instant::now();
-    let base = read_binary_vectors(&format!("{}/base.bin", data_path));
+    let base = read_binary_vectors(&format!("{}/cohere_base.bin", data_path));
     println!("  Loaded {} vectors ({}D) in {:.2}s", base.len(), base[0].len(), start.elapsed().as_secs_f32());
     
     println!("Loading queries...");
-    let queries = read_binary_vectors(&format!("{}/query.bin", data_path));
+    let queries = read_binary_vectors(&format!("{}/cohere_query.bin", data_path));
     println!("  Loaded {} queries", queries.len());
     
     println!("Loading ground truth...");
-    let ground_truth = read_binary_groundtruth(&format!("{}/groundtruth.bin", data_path));
+    let ground_truth = read_binary_groundtruth(&format!("{}/cohere_groundtruth.bin", data_path));
     println!("  Loaded {} ground truth vectors (top-{})\n", ground_truth.len(), ground_truth[0].len());
 
     // Build SPANN index
-    println!("Building SPANN index with 1-bit quantization...");
+    let quantization = if enable_quantization {
+        match bits {
+            1 => QuantizationType::OneBit,
+            2 => QuantizationType::TwoBit,
+            4 => QuantizationType::FourBit,
+            _ => {
+                eprintln!("Invalid bits: {}. Must be 1, 2, or 4", bits);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        QuantizationType::None
+    };
+    println!("Building SPANN index with {:?} quantization...", quantization);
     let start = Instant::now();
     let mut index = SPANNIndex::new();
     index.set_metric(DistanceMetric::InnerProduct);
     index.set_hbc_sample_size(Some(200_000));
-    index.set_quantization(QuantizationType::OneBit);
+    index.set_quantization(quantization);
     index.build(base);
     let build_time = start.elapsed();
     println!("\nBuild time: {:.2}s ({:.2} min)", build_time.as_secs_f32(), build_time.as_secs_f32() / 60.0);
@@ -108,7 +129,7 @@ fn main() {
     // Save index
     println!("\nSaving index to: {}", index_path);
     let start = Instant::now();
-    index.save(&index_path, enable_compression, false).unwrap();
+    index.save(&index_path, enable_zstd, enable_delta).unwrap();
     println!("  Save time: {:.2}s", start.elapsed().as_secs_f32());
     let size = std::fs::metadata(&index_path).unwrap().len();
     println!("  File size: {:.2} MB\n", size as f32 / 1024.0 / 1024.0);

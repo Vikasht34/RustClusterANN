@@ -36,15 +36,16 @@ impl SPANNStorage {
         path: &str,
         enable_compression: bool,
         enable_delta: bool,
+        save_quantized: bool,  // NEW: if true, save quantized data instead of full vectors
     ) -> io::Result<()> {
         let mut file = File::create(path)?;
         
         // Write header
         let num_postings = postings.len() as u64;
-        let dim = if !full_vectors.is_empty() { full_vectors[0].len() } else { 0 };
+        let dim = if !full_vectors.is_empty() { full_vectors[0].len()} else { 0 };
         file.write_all(&num_postings.to_le_bytes())?;
         file.write_all(&(dim as u32).to_le_bytes())?;
-        file.write_all(&[enable_compression as u8, enable_delta as u8])?;
+        file.write_all(&[enable_compression as u8, enable_delta as u8, save_quantized as u8])?;
         
         // Reserve space for list infos
         let list_infos_offset = file.seek(SeekFrom::Current(0))?;
@@ -65,21 +66,36 @@ impl SPANNStorage {
                 buffer.extend_from_slice(&(id as u32).to_le_bytes());
             }
             
-            // Write full precision vectors
-            if enable_delta {
-                let head_vec = &full_vectors[posting.head_id];
-                for &id in &posting.vector_ids {
-                    let vec = &full_vectors[id];
-                    for (i, &val) in vec.iter().enumerate() {
-                        let delta = val - head_vec[i];
-                        buffer.extend_from_slice(&delta.to_le_bytes());
-                    }
-                }
+            // Write vectors: quantized or full precision
+            if save_quantized && posting.quantized_data.is_some() && posting.quantizer.is_some() {
+                // Write quantized data
+                let quantized = posting.quantized_data.as_ref().unwrap();
+                let quantizer = posting.quantizer.as_ref().unwrap();
+                
+                // Write quantizer metadata
+                let metadata = quantizer.serialize_metadata();
+                buffer.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+                buffer.extend_from_slice(&metadata);
+                
+                // Write quantized codes
+                buffer.extend_from_slice(quantized);
             } else {
-                for &id in &posting.vector_ids {
-                    let vec = &full_vectors[id];
-                    for &val in vec {
-                        buffer.extend_from_slice(&val.to_le_bytes());
+                // Write full precision vectors
+                if enable_delta {
+                    let head_vec = &full_vectors[posting.head_id];
+                    for &id in &posting.vector_ids {
+                        let vec = &full_vectors[id];
+                        for (i, &val) in vec.iter().enumerate() {
+                            let delta = val - head_vec[i];
+                            buffer.extend_from_slice(&delta.to_le_bytes());
+                        }
+                    }
+                } else {
+                    for &id in &posting.vector_ids {
+                        let vec = &full_vectors[id];
+                        for &val in vec {
+                            buffer.extend_from_slice(&val.to_le_bytes());
+                        }
                     }
                 }
             }
@@ -141,10 +157,11 @@ impl SPANNStorage {
         file.read_exact(&mut dim_bytes)?;
         let dim = u32::from_le_bytes(dim_bytes) as usize;
         
-        let mut flags = [0u8; 2];
+        let mut flags = [0u8; 3];
         file.read_exact(&mut flags)?;
         let enable_compression = flags[0] != 0;
         let enable_delta = flags[1] != 0;
+        let has_quantization = flags[2] != 0;
         
         // Read list infos
         let mut list_infos = Vec::with_capacity(num_postings);
@@ -232,39 +249,81 @@ impl SPANNStorage {
             
             // Parse vectors
             let vec_data_offset = info.ele_count as usize * 4;
-            let head_vec = if enable_delta && head_idx < all_vectors.len() {
-                Some(all_vectors[head_idx].clone())
+            
+            let (quantized_data, quantizer) = if has_quantization && !vector_ids.is_empty() {
+                // Read quantized data
+                let meta_len = u32::from_le_bytes([
+                    buffer[vec_data_offset],
+                    buffer[vec_data_offset + 1],
+                    buffer[vec_data_offset + 2],
+                    buffer[vec_data_offset + 3],
+                ]) as usize;
+                
+                if head_idx == 0 {
+                    println!("Loading quantized data: meta_len={}, vec_count={}", meta_len, vector_ids.len());
+                }
+                
+                let meta_start = vec_data_offset + 4;
+                let (mut quantizer, _) = crate::multibit::MultiBitQuantizer::deserialize_metadata(
+                    &buffer[meta_start..meta_start + meta_len]
+                );
+                
+                let codes_start = meta_start + meta_len;
+                let bits = quantizer.bits();
+                let bytes_per_vec = (dim * bits + 7) / 8;
+                let codes_len = info.ele_count as usize * bytes_per_vec;
+                
+                if head_idx == 0 {
+                    println!("  bits={}, bytes_per_vec={}, codes_len={}, buffer_remaining={}", 
+                             bits, bytes_per_vec, codes_len, buffer.len() - codes_start);
+                }
+                
+                let quantized_data = buffer[codes_start..codes_start + codes_len].to_vec();
+                
+                // Populate binary_codes in quantizer
+                quantizer.set_binary_codes(quantized_data.clone());
+                
+                (Some(quantized_data), Some(quantizer))
             } else {
-                None
+                (None, None)
             };
             
-            for (i, &vec_id) in vector_ids.iter().enumerate() {
-                if !vector_map.contains_key(&vec_id) {
-                    let vec_offset = vec_data_offset + i * dim * 4;
-                    let mut vec = Vec::with_capacity(dim);
-                    for d in 0..dim {
-                        let val_offset = vec_offset + d * 4;
-                        let val_bytes = &buffer[val_offset..val_offset + 4];
-                        let mut val = f32::from_le_bytes([val_bytes[0], val_bytes[1], val_bytes[2], val_bytes[3]]);
-                        
-                        // Apply delta decoding if needed
-                        if let Some(ref head) = head_vec {
-                            val += head[d];
+            // Load full precision vectors only if NOT quantized
+            if quantized_data.is_none() {
+                let head_vec = if enable_delta && head_idx < all_vectors.len() {
+                    Some(all_vectors[head_idx].clone())
+                } else {
+                    None
+                };
+                
+                for (i, &vec_id) in vector_ids.iter().enumerate() {
+                    if !vector_map.contains_key(&vec_id) {
+                        let vec_offset = vec_data_offset + i * dim * 4;
+                        let mut vec = Vec::with_capacity(dim);
+                        for d in 0..dim {
+                            let val_offset = vec_offset + d * 4;
+                            let val_bytes = &buffer[val_offset..val_offset + 4];
+                            let mut val = f32::from_le_bytes([val_bytes[0], val_bytes[1], val_bytes[2], val_bytes[3]]);
+                            
+                            // Apply delta decoding if needed
+                            if let Some(ref head) = head_vec {
+                                val += head[d];
+                            }
+                            
+                            vec.push(val);
                         }
                         
-                        vec.push(val);
+                        all_vectors[vec_id] = vec;
+                        vector_map.insert(vec_id, true);
                     }
-                    
-                    all_vectors[vec_id] = vec;
-                    vector_map.insert(vec_id, true);
                 }
             }
             
             postings.push(crate::spann::PostingList {
                 head_id: if !vector_ids.is_empty() { vector_ids[0] } else { head_idx },
                 vector_ids,
-                quantized_data: None,
-                quantizer: None,
+                quantized_data,
+                quantizer,
             });
         }
         
