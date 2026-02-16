@@ -93,13 +93,14 @@ async fn main() {
     let enable_quantization = args.contains(&"--enable-compression".to_string());
     let enable_zstd = args.contains(&"--zstd".to_string());
     let enable_delta = args.contains(&"--delta".to_string());
+    let search_only = args.contains(&"--search-only".to_string());
     
     println!("=== Cohere 1M On-Demand Loading Benchmark ===\n");
     
     // Check if index exists
     let index_exists = std::path::Path::new(&index_path).exists();
     
-    if !index_exists {
+    if !index_exists && !search_only {
         // Load data and build index
         println!("Loading Cohere 1M dataset from: {}", data_path);
         let start = Instant::now();
@@ -138,6 +139,11 @@ async fn main() {
         println!("  Save time: {:.2}s", start.elapsed().as_secs_f32());
         let size = std::fs::metadata(&index_path).unwrap().len();
         println!("  File size: {:.2} MB\n", size as f32 / 1024.0 / 1024.0);
+    } else if search_only && !index_exists {
+        eprintln!("Error: --search-only specified but index not found at {}", index_path);
+        std::process::exit(1);
+    } else if index_exists {
+        println!("Index already exists at {}, skipping build\n", index_path);
     }
     
     // Load queries and ground truth
