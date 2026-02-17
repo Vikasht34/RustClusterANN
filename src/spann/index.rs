@@ -157,7 +157,7 @@ impl SPANNIndex {
         }
     }
 
-    pub fn build(&mut self, vectors: Vec<Vec<f32>>) {
+    pub fn build(&mut self, vectors: Vec<Vec<f32>>, skip_knng: bool) {
         let n = vectors.len();
         println!("Building SPANN index on {} vectors", n);
         println!("Using {:.0}% heads (SPTAG default)", self.ratio * 100.0);
@@ -185,7 +185,7 @@ impl SPANNIndex {
             .map(|&i| self.full_vectors[i].clone())
             .collect();
         
-        self.head_index.build(head_vectors, 2);
+        self.head_index.build(head_vectors, 2, skip_knng);
         self.head_id_map = head_indices;
         println!("  Head index built: {} vectors", self.head_index.len());
         

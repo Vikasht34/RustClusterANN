@@ -74,6 +74,7 @@ run_benchmark() {
         --index-path "$index_path" \
         --zstd \
         --delta \
+        --skip-knng \
         --num-heads $NUM_HEADS \
         --max-check $MAX_CHECK \
         --metric $metric \

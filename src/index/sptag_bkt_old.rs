@@ -1,88 +1,79 @@
-/// Complete SPTAG-BKT index: BK-Tree + TP-Trees + RNG Graph
+/// Complete SPTAG index with BK-Tree + KNNG + NPA
 use super::bktree_recursive::BKTreeBuilder;
-use super::tptree::TPTree;
 use super::rng::RNGGraph;
 use crate::simd;
-use crate::dataset::Dataset;
 
 pub struct SPTAGBKTIndex {
-    tree: BKTreeBuilder,           // BK-Tree for search (K=32, leaf_size=8)
-    pub graph: RNGGraph,           // RNG graph for neighbor search
-    data: Vec<Vec<f32>>,           // Original data
-    num_tpt_trees: usize,          // Number of TP-Trees for KNNG (default: 32)
+    tree: BKTreeBuilder,
+    pub graph: RNGGraph,
+    data: Vec<Vec<f32>>,
+    num_trees: usize,  // Number of trees to build (SPTAG default: 32)
 }
 
 impl SPTAGBKTIndex {
-    pub fn new(k: usize, bkt_leaf_size: usize, max_degree: usize, rng_factor: f32, cef: usize, num_tpt_trees: usize) -> Self {
+    pub fn new(k: usize, leaf_size: usize, max_degree: usize, rng_factor: f32, cef: usize, num_trees: usize) -> Self {
         Self {
-            tree: BKTreeBuilder::new(k, bkt_leaf_size, 1000),
+            tree: BKTreeBuilder::new(k, leaf_size, 1000),
             graph: RNGGraph::new(max_degree, rng_factor, cef),
             data: Vec::new(),
-            num_tpt_trees,
+            num_trees,
         }
     }
 
-    pub fn build(&mut self, data: Vec<Vec<f32>>, refine_iters: usize, skip_knng: bool) {
-        println!("\n=== SPTAG-BKT Index Build ===");
-        println!("Vectors: {}, Dim: {}", data.len(), data[0].len());
-        println!("BK-Tree: K=32, leaf_size=8");
-        if !skip_knng {
-            println!("TP-Trees: {} trees, leaf_size=2000", self.num_tpt_trees);
-            println!("RNG: max_degree={}, refine_iters={}", self.graph.max_degree, refine_iters);
-        } else {
-            println!("KNNG: Skipped (on-demand loading mode)");
+    pub fn build(&mut self, data: Vec<Vec<f32>>, refine_iters: usize) {
+        self.build_with_verbosity(data, refine_iters, true);
+    }
+    
+    pub fn build_quiet(&mut self, data: Vec<Vec<f32>>, refine_iters: usize) {
+        self.build_with_verbosity(data, refine_iters, false);
+    }
+    
+    fn build_with_verbosity(&mut self, data: Vec<Vec<f32>>, refine_iters: usize, verbose: bool) {
+        if verbose {
+            println!("Building SPTAG-BKT index for {} vectors...", data.len());
+            println!("Using {} trees for better coverage", self.num_trees);
         }
         
         let start = std::time::Instant::now();
         self.data = data;
+        
         let n = self.data.len();
         let max_degree = self.graph.max_degree;
         
-        // Convert to Dataset for zero-copy operations
-        let dataset = Dataset::from_vectors(&self.data);
-        
-        // Step 1: Build BK-Tree for search routing
-        println!("\n[1/3] Building BK-Tree for search...");
-        let tree_start = std::time::Instant::now();
-        self.tree.build(&dataset);
-        println!("  ✓ BK-Tree built in {:.2}s", tree_start.elapsed().as_secs_f32());
-        
-        if skip_knng {
-            println!("\n[2/3] Skipping KNNG construction (on-demand mode)");
-            println!("\n[3/3] Skipping RNG refinement (on-demand mode)");
-            println!("\n✓ Index built in {:.2}s ({:.2} min)", start.elapsed().as_secs_f32(), start.elapsed().as_secs_f32() / 60.0);
-            return;
-        }
-        
-        // Step 2: Build KNNG using TP-Trees
-        println!("\n[2/3] Building KNNG with {} TP-Trees...", self.num_tpt_trees);
-        let knng_start = std::time::Instant::now();
-        
+        // Initialize graph
         let mut neighbors = vec![Vec::new(); n];
         let mut neighbor_dists = vec![vec![f32::MAX; max_degree]; n];
         
-        let tptree = TPTree::new(2000, 1000, 5); // SPTAG defaults
-        
-        for tree_idx in 0..self.num_tpt_trees {
-            print!("  Tree {}/{}: ", tree_idx + 1, self.num_tpt_trees);
-            std::io::Write::flush(&mut std::io::stdout()).ok();
+        // Build multiple trees and accumulate neighbors
+        for tree_idx in 0..self.num_trees {
+            println!("\n{}. Building Tree {}/{}...", tree_idx + 1, tree_idx + 1, self.num_trees);
+            let tree_start = std::time::Instant::now();
             
             // Shuffle indices for this tree
             use rand::seq::SliceRandom;
             let mut rng = rand::thread_rng();
-            let mut shuffled_indices: Vec<usize> = (0..n).collect();
-            shuffled_indices.shuffle(&mut rng);
+            let mut shuffled_data: Vec<usize> = (0..n).collect();
+            shuffled_data.shuffle(&mut rng);
             
-            // Build TP-Tree
-            let leaves = tptree.build(&dataset, &mut shuffled_indices);
+            // Create shuffled view
+            let shuffled_vecs: Vec<Vec<f32>> = shuffled_data.iter()
+                .map(|&i| self.data[i].clone())
+                .collect();
             
-            // Process leaves to build KNNG
+            // Build tree on shuffled data
+            let leaves = self.tree.build(&shuffled_vecs);
+            let indices = self.tree.get_indices();
+            
+            println!("   Tree built in {:.2}s with {} leaves", tree_start.elapsed().as_secs_f32(), leaves.len());
+            
+            // Build KNNG from leaves
             let mut pairs = 0;
             for &(first, last) in &leaves {
                 for i in first..last {
                     for j in (i + 1)..last {
-                        let p1 = shuffled_indices[i];
-                        let p2 = shuffled_indices[j];
+                        // Map back to original indices
+                        let p1 = shuffled_data[indices[i]];
+                        let p2 = shuffled_data[indices[j]];
                         let dist = simd::l2_distance(&self.data[p1], &self.data[p2]);
                         
                         Self::add_neighbor(p1, p2, dist, &mut neighbors, &mut neighbor_dists, max_degree);
@@ -91,39 +82,59 @@ impl SPTAGBKTIndex {
                     }
                 }
             }
-            println!("{} leaves, {} pairs", leaves.len(), pairs);
+            println!("   Computed {} pairs", pairs);
         }
         
         self.graph.neighbors = neighbors;
         
-        // Check graph statistics
+        // Debug: Check graph statistics
         let mut total_neighbors = 0;
+        let mut min_neighbors = usize::MAX;
+        let mut max_neighbors = 0;
         let mut nodes_with_neighbors = 0;
+        
         for node_neighbors in &self.graph.neighbors {
-            if !node_neighbors.is_empty() {
+            let count = node_neighbors.len();
+            if count > 0 {
                 nodes_with_neighbors += 1;
-                total_neighbors += node_neighbors.len();
+                total_neighbors += count;
+                min_neighbors = min_neighbors.min(count);
+                max_neighbors = max_neighbors.max(count);
             }
         }
-        println!("  ✓ KNNG built in {:.2}s", knng_start.elapsed().as_secs_f32());
-        println!("    Nodes with neighbors: {}/{}", nodes_with_neighbors, n);
-        println!("    Avg neighbors: {:.2}", total_neighbors as f32 / n as f32);
         
-        // Step 3: Refine graph with RNG/NPA
+        println!("\nKNNG Statistics:");
+        println!("  Nodes with neighbors: {}/{}", nodes_with_neighbors, n);
+        println!("  Avg neighbors: {:.2}", total_neighbors as f32 / n as f32);
+        println!("  Min neighbors: {}", if min_neighbors == usize::MAX { 0 } else { min_neighbors });
+        println!("  Max neighbors: {}", max_neighbors);
+        
+        // Step 3: Refine with NPA
         if refine_iters > 0 {
-            println!("\n[3/3] Refining graph with RNG ({} iterations)...", refine_iters);
+            println!("\nRefining graph with NPA...");
             let refine_start = std::time::Instant::now();
             self.graph.refine_graph(&self.data, refine_iters);
             
+            // Check graph after NPA
             let mut total = 0;
+            let mut min = usize::MAX;
+            let mut max = 0;
             for neighbors in &self.graph.neighbors {
-                total += neighbors.len();
+                let count = neighbors.len();
+                total += count;
+                if count > 0 {
+                    min = min.min(count);
+                    max = max.max(count);
+                }
             }
-            println!("  ✓ Graph refined in {:.2}s", refine_start.elapsed().as_secs_f32());
-            println!("    Avg neighbors after refinement: {:.2}", total as f32 / n as f32);
+            println!("  After NPA: avg={:.2}, min={}, max={}", 
+                     total as f32 / n as f32, 
+                     if min == usize::MAX { 0 } else { min }, 
+                     max);
+            println!("  Graph refined in {:.2}s", refine_start.elapsed().as_secs_f32());
         }
         
-        println!("\n=== Build Complete in {:.2}s ===\n", start.elapsed().as_secs_f32());
+        println!("\nTotal build time: {:.2}s", start.elapsed().as_secs_f32());
     }
 
     fn add_neighbor(
@@ -192,15 +203,20 @@ impl SPTAGBKTIndex {
         &self.data
     }
     
+    /// Save index to file
     pub fn save(&self, path: &str) -> std::io::Result<()> {
         use std::fs::File;
         use std::io::Write;
         
         let mut file = File::create(path)?;
         
+        // Save tree
         self.tree.save(&mut file)?;
+        
+        // Save graph
         self.graph.save(&mut file)?;
         
+        // Save data
         let num_vecs = self.data.len() as u32;
         file.write_all(&num_vecs.to_le_bytes())?;
         
@@ -215,20 +231,26 @@ impl SPTAGBKTIndex {
             }
         }
         
-        file.write_all(&(self.num_tpt_trees as u32).to_le_bytes())?;
+        // Save num_trees
+        file.write_all(&(self.num_trees as u32).to_le_bytes())?;
         
         Ok(())
     }
     
+    /// Load index from file
     pub fn load(path: &str) -> std::io::Result<Self> {
         use std::fs::File;
         use std::io::Read;
         
         let mut file = File::open(path)?;
         
+        // Load tree
         let tree = BKTreeBuilder::load(&mut file)?;
+        
+        // Load graph
         let graph = RNGGraph::load(&mut file)?;
         
+        // Load data
         let mut buf = [0u8; 4];
         file.read_exact(&mut buf)?;
         let num_vecs = u32::from_le_bytes(buf) as usize;
@@ -248,14 +270,15 @@ impl SPTAGBKTIndex {
             }
         }
         
+        // Load num_trees
         file.read_exact(&mut buf)?;
-        let num_tpt_trees = u32::from_le_bytes(buf) as usize;
+        let num_trees = u32::from_le_bytes(buf) as usize;
         
         Ok(Self {
             tree,
             graph,
             data,
-            num_tpt_trees,
+            num_trees,
         })
     }
 }

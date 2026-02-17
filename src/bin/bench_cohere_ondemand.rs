@@ -29,6 +29,9 @@ struct Args {
     
     #[arg(long, default_value = "inner-product")]
     metric: String,  // "l2", "inner-product", or "cosine"
+    
+    #[arg(long)]
+    skip_knng: bool,  // Skip KNNG construction (for on-demand loading)
 }
 
 fn read_binary_vectors(filename: &str) -> Vec<Vec<f32>> {
@@ -132,7 +135,7 @@ async fn main() {
         let mut index = SPANNIndex::new();
         index.set_metric(metric);
         index.set_hbc_sample_size(Some(200_000));
-        index.build(base);
+        index.build(base, args.skip_knng);
         let build_time = start.elapsed();
         println!("Build time: {:.2}s ({:.2} min)\n", build_time.as_secs_f32(), build_time.as_secs_f32() / 60.0);
         
