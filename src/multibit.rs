@@ -46,6 +46,13 @@ impl MultiBitQuantizer {
         self.bits
     }
     
+    pub fn debug_params(&self, idx: usize) {
+        if idx < self.n_vectors {
+            println!("    Vec {}: f_add_ex={:.4}, f_rescale_ex={:.4}", 
+                idx, self.f_add_ex[idx], self.f_rescale_ex[idx]);
+        }
+    }
+    
     pub fn set_binary_codes(&mut self, codes: Vec<u8>) {
         self.binary_codes = codes;
     }
@@ -69,6 +76,7 @@ impl MultiBitQuantizer {
     
     pub fn fit(&mut self, vectors: &[Vec<f32>], centroid: &[f32], metric: MetricType) {
         self.n_vectors = vectors.len();
+        self.dim = vectors[0].len();  // Set dim from vectors!
         self.centroid = centroid.to_vec();
         
         let ex_bits = self.bits - 1;  // RaBitQ: ex_bits = total_bits - 1
