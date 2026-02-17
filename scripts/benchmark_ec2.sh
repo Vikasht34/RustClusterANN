@@ -47,10 +47,10 @@ run_benchmark() {
     echo "Metric: $metric"
     echo "========================================="
     
-    # Check if data exists
-    if [ ! -d "$data_path" ]; then
-        echo "ERROR: Data not found at $data_path"
-        echo "Please download dataset first"
+    # Check if data exists (look for .bin files)
+    if [ ! -f "$data_path/base.bin" ]; then
+        echo "ERROR: Data not found at $data_path/base.bin"
+        echo "Please ensure base.bin, query.bin, and groundtruth.bin exist"
         return 1
     fi
     
