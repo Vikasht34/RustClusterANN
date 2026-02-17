@@ -21,7 +21,7 @@ fi
 declare -A DATASETS
 DATASETS[gist]="gist 960 l2"
 DATASETS[glove]="glove 100 cosine"
-DATASETS[cohere]="cohere 768 cosine"
+DATASETS[cohere]="cohere 768 ip"
 DATASETS[sift]="sift 128 l2"
 DATASETS[mpnet]="mpnet-msmarco 768 l2"
 DATASETS[snowflake]="snowflake-msmarco 768 l2"
