@@ -184,6 +184,11 @@ impl SPTAGBKTIndex {
         self.graph.search(query, &self.data, k, &entry_points, max_checks)
     }
     
+    /// Search using BK-Tree only (no KNNG graph)
+    pub fn search_bktree_only(&self, query: &[f32], k: usize) -> Vec<(usize, f32)> {
+        self.tree.search(query, &self.data, k)
+    }
+    
     pub fn len(&self) -> usize {
         self.data.len()
     }

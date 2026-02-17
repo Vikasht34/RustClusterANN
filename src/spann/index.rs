@@ -92,6 +92,9 @@ pub struct SPANNIndex {
     
     // Search limits (SPTAG defaults)
     max_check: usize,  // Max candidates to check (default 4096)
+    
+    // Skip KNNG flag (use BK-Tree only for posting assignment)
+    skip_knng: bool,
 }
 
 
@@ -122,6 +125,7 @@ impl SPANNIndex {
             enable_rearrangement: false,
             enable_dict_training: false,
             max_check: 4096,                // SPTAG default
+            skip_knng: false,               // Default: use KNNG
         }
     }
     pub fn enable_optimizations(&mut self, rearrangement: bool, dict_training: bool) {
@@ -164,6 +168,7 @@ impl SPANNIndex {
         
         self.full_vectors = vectors;
         self.dim = if !self.full_vectors.is_empty() { self.full_vectors[0].len() } else { 0 };
+        self.skip_knng = skip_knng;  // Store for later use
         
         // Phase 1: Select heads using HBC
         println!("\nPhase 1: Selecting heads (HBC)...");
@@ -218,7 +223,12 @@ impl SPANNIndex {
                 println!("  Assigned {}/{} vectors", vec_id, self.full_vectors.len());
             }
             
-            let results = self.head_index.search(vec, self.replica_count, self.internal_result_num);
+            // Use BK-Tree only search if KNNG was skipped
+            let results = if self.skip_knng {
+                self.head_index.search_bktree_only(vec, self.replica_count)
+            } else {
+                self.head_index.search(vec, self.replica_count, self.internal_result_num)
+            };
             
             for (head_idx, dist) in results {
                 if head_idx < num_heads {
@@ -946,6 +956,7 @@ impl SPANNIndex {
             enable_rearrangement: false,
             enable_dict_training: false,
             max_check: 4096,  // SPTAG default
+            skip_knng: false,  // Loaded indexes always have KNNG
         })
     }
     
