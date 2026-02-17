@@ -537,6 +537,11 @@ impl SPANNIndex {
         k: usize,
         storage: &crate::spann::OptimizedAsyncStorage,
     ) -> std::io::Result<Vec<(usize, f32)>> {
+        // Check if we should use quantized search
+        if storage.has_quantization() {
+            return self.search_async_quantized(query, k, storage).await;
+        }
+        
         // Step 1: Search head index (in RAM)
         let head_results = self.head_index.search(query, self.num_heads_to_search, 500);
         let posting_ids: Vec<usize> = head_results.iter().map(|(idx, _)| *idx).collect();
@@ -627,6 +632,71 @@ impl SPANNIndex {
         }
         
         // Step 5: Sort and return top-k
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        candidates.truncate(k);
+        Ok(candidates)
+    }
+    
+    /// On-demand search with quantized data
+    async fn search_async_quantized(
+        &self,
+        query: &[f32],
+        k: usize,
+        storage: &crate::spann::OptimizedAsyncStorage,
+    ) -> std::io::Result<Vec<(usize, f32)>> {
+        use crate::multibit::MultiBitQuantizer;
+        
+        // Step 1: Search head index
+        let head_results = self.head_index.search(query, self.num_heads_to_search, 500);
+        let posting_ids: Vec<usize> = head_results.iter().map(|(idx, _)| *idx).collect();
+        
+        // Step 2: Load posting lists
+        let posting_data = storage.load_postings_parallel(&posting_ids).await?;
+        
+        // Step 3: Parse and compute distances with quantized data
+        let mut deduper = crate::spann::FastDedup::new(self.max_check);
+        let mut candidates = Vec::with_capacity(self.max_check);
+        
+        let quant_metric = match self.metric {
+            DistanceMetric::L2 => crate::multibit::MetricType::L2,
+            DistanceMetric::InnerProduct => crate::multibit::MetricType::IP,
+        };
+        
+        'outer: for (posting_idx, data) in posting_data.iter().enumerate() {
+            let list_info = &storage.list_infos[posting_ids[posting_idx]];
+            let count = list_info.ele_count as usize;
+            let mut cursor = 0;
+            
+            // Read vector IDs
+            let mut vec_ids = Vec::with_capacity(count);
+            for _ in 0..count {
+                if cursor + 4 > data.len() { break; }
+                let id = u32::from_le_bytes([data[cursor], data[cursor+1], data[cursor+2], data[cursor+3]]) as usize;
+                vec_ids.push(id);
+                cursor += 4;
+            }
+            
+            // Read quantizer metadata
+            if cursor + 4 > data.len() { continue; }
+            let meta_len = u32::from_le_bytes([data[cursor], data[cursor+1], data[cursor+2], data[cursor+3]]) as usize;
+            cursor += 4;
+            
+            if cursor + meta_len > data.len() { continue; }
+            let (quantizer, _) = MultiBitQuantizer::deserialize_metadata(&data[cursor..cursor+meta_len]);
+            cursor += meta_len;
+            
+            // Compute distances using quantizer
+            let distances = quantizer.compute_distances(query, quant_metric);
+            
+            for (i, &vec_id) in vec_ids.iter().enumerate() {
+                if candidates.len() >= self.max_check { break 'outer; }
+                if deduper.check_and_set(vec_id) { continue; }
+                if i < distances.len() {
+                    candidates.push((vec_id, distances[i]));
+                }
+            }
+        }
+        
         candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         candidates.truncate(k);
         Ok(candidates)
