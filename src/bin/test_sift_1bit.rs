@@ -57,7 +57,7 @@ fn read_ivecs(filename: &str) -> Vec<Vec<i32>> {
 
 #[tokio::main]
 async fn main() {
-    println!("=== SIFT 1M: 1-bit Quantization with Reranking ===\n");
+    println!("=== SIFT 1M: 2-bit Quantization with Reranking ===\n");
     
     let data_path = "/Users/viktari/rustsptag/data/sift";
     let index_path = "/tmp/sift_1bit.idx";
@@ -68,11 +68,11 @@ async fn main() {
     let base = read_fvecs(&format!("{}/sift_base.fvecs", data_path));
     println!("  Loaded {} vectors ({}D) in {:.2}s\n", base.len(), base[0].len(), start.elapsed().as_secs_f32());
     
-    println!("Building index with 1-bit quantization...");
+    println!("Building index with 2-bit quantization...");
     let start = Instant::now();
     let mut index = SPANNIndex::new();
     index.set_metric(DistanceMetric::L2);
-    index.set_quantization(QuantizationType::OneBit);
+    index.set_quantization(QuantizationType::TwoBit);
     index.set_hbc_sample_size(Some(200_000));
     index.build(base);
     println!("Build time: {:.2}s\n", start.elapsed().as_secs_f32());

@@ -59,13 +59,13 @@ fn read_ivecs(filename: &str) -> Vec<Vec<i32>> {
 async fn main() {
     println!("=== SIFT: NO quantization (baseline) ===\n");
     
-    let data_path = "/Users/viktari/rustsptag/data/sift";
+    let data_path = "/Users/viktari/pysptag/data/sift";
     let index_path = "/tmp/sift_no_quant.idx";
     
     // Build index WITHOUT quantization
     println!("Loading SIFT base vectors...");
     let start = Instant::now();
-    let base = read_fvecs(&format!("{}/sift_learn.fvecs", data_path));
+    let base = read_fvecs(&format!("{}/sift_base.fvecs", data_path));
     println!("  Loaded {} vectors ({}D) in {:.2}s\n", base.len(), base[0].len(), start.elapsed().as_secs_f32());
     
     println!("Building index WITHOUT quantization...");

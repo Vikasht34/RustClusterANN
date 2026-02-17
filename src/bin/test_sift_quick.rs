@@ -65,8 +65,8 @@ async fn main() {
     // Load index
     println!("Loading index from {}...", index_path);
     let mut index = SPANNIndex::load_with_mode(index_path, true).unwrap();
-    index.set_num_heads_to_search(128);
-    index.set_max_check(8192);
+    index.set_num_heads_to_search(512);
+    index.set_max_check(16384);
     
     let storage = index.create_async_storage().unwrap();
     println!("Index loaded\n");
@@ -86,7 +86,7 @@ async fn main() {
     let mut total_recall = 0.0;
     
     for (i, query) in queries.iter().take(100).enumerate() {
-        let results = index.search_async_with_rerank(query, 10, 3, &storage).await.unwrap();
+        let results = index.search_async_with_rerank(query, 10, 20, &storage).await.unwrap();
         
         let result_ids: std::collections::HashSet<_> = results.iter().map(|(id, _)| *id).collect();
         let gt_ids: std::collections::HashSet<_> = ground_truth[i].iter().take(10).map(|&id| id as usize).collect();
