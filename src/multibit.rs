@@ -445,6 +445,19 @@ impl MultiBitQuantizer {
         (quantizer, cursor)
     }
     
+    /// Set quantized codes from raw bytes (for on-demand loading)
+    pub fn set_codes_from_bytes(&mut self, data: &[u8], n_vectors: usize) {
+        self.n_vectors = n_vectors;
+        
+        // Calculate sizes
+        let bytes_per_vec = (self.dim + 7) / 8;  // 1-bit codes
+        let binary_size = n_vectors * bytes_per_vec;
+        
+        if data.len() >= binary_size {
+            self.binary_codes = data[..binary_size].to_vec();
+        }
+    }
+    
     /// Quantize a single query vector (NOT NEEDED - RaBitQ uses ADC)
     /// Keeping for reference but should not be used
     #[allow(dead_code)]

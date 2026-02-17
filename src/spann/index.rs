@@ -682,8 +682,12 @@ impl SPANNIndex {
             cursor += 4;
             
             if cursor + meta_len > data.len() { continue; }
-            let (quantizer, _) = MultiBitQuantizer::deserialize_metadata(&data[cursor..cursor+meta_len]);
+            let (mut quantizer, _) = MultiBitQuantizer::deserialize_metadata(&data[cursor..cursor+meta_len]);
             cursor += meta_len;
+            
+            // Read quantized codes (rest of the data)
+            let codes_data = &data[cursor..];
+            quantizer.set_codes_from_bytes(codes_data, count);
             
             // Compute distances using quantizer
             let distances = quantizer.compute_distances(query, quant_metric);
