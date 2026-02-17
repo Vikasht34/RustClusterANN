@@ -503,7 +503,7 @@ impl SPANNIndex {
     ) -> std::io::Result<Vec<(usize, f32)>> {
         // Stage 1: Get more candidates with quantized search
         let candidate_count = k * rerank_factor;
-        let candidates = self.search_async_full_precision(query, candidate_count, storage).await?;
+        let candidates = self.search_async_quantized(query, candidate_count, storage).await?;
         
         // Stage 2: Rerank with full precision from .vectors file
         if let Some(ref index_path) = self.index_path {
@@ -687,7 +687,11 @@ impl SPANNIndex {
             
             // Read quantized codes (rest of the data)
             let codes_data = &data[cursor..];
-            quantizer.set_codes_from_bytes(codes_data, count);
+            if codes_data.is_empty() {
+                eprintln!("WARNING: No quantized codes data for posting {}", posting_idx);
+                continue;
+            }
+            quantizer.set_codes_from_bytes(codes_data);
             
             // Compute distances using quantizer
             let distances = quantizer.compute_distances(query, quant_metric);
