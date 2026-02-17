@@ -82,6 +82,10 @@ impl HBCSelector {
             &mut selected_in_sample,
         );
         
+        // Deduplicate (SPTAG does this)
+        selected_in_sample.sort_unstable();
+        selected_in_sample.dedup();
+        
         // Map back to original indices
         let selected: Vec<usize> = selected_in_sample.iter()
             .map(|&i| sampled_indices[i])
@@ -96,58 +100,54 @@ impl HBCSelector {
         total_size: usize,
         target_ratio: f32,
     ) -> (usize, usize) {
-        // Auto-compute initial thresholds from ratio (SPTAG does this)
-        let select_threshold = if self.select_threshold == 0 {
-            (1.0 / target_ratio) as usize
-        } else {
-            self.select_threshold
-        };
-        
-        let split_threshold = if self.split_threshold == 0 {
-            select_threshold * 2
-        } else {
-            self.split_threshold
-        };
-        
-        let split_factor = if self.split_factor == 0 {
-            (1.0 / target_ratio + 0.5) as usize
-        } else {
-            self.split_factor
-        };
-        
         let target_count = (total_size as f32 * target_ratio) as usize;
-        let mut best_select = select_threshold;
-        let mut best_split = split_threshold;
+        
+        // SPTAG defaults
+        let max_select = 100;  // SPTAG uses configured threshold, we use 100
+        let split_factor = 2;
+        let initial_split = 200;
+        
+        let mut best_select = 2;
+        let mut best_split = initial_split;
         let mut min_diff = f32::MAX;
         
-        // Binary search for optimal thresholds (SPTAG algorithm)
-        for select in 2..=select_threshold.min(6) {
+        // Try different select thresholds (SPTAG algorithm)
+        for select in 2..=max_select {
             let mut l = split_factor;
-            let mut r = split_threshold;
+            let mut r = initial_split;
             
             while l < r - 1 {
                 let split = (l + r) / 2;
                 let mut selected = Vec::new();
                 self.select_recursive(tree, 0, select, split, &mut selected);
                 
-                let diff = (selected.len() as f32 / total_size as f32 - target_ratio).abs();
+                // Deduplicate (SPTAG does this!)
+                selected.sort_unstable();
+                selected.dedup();
                 
-                if diff < min_diff {
-                    min_diff = diff;
+                let count = selected.len();
+                let ratio = count as f32 / total_size as f32;
+                let diff = ratio - target_ratio;
+                
+                if min_diff > diff.abs() {
+                    min_diff = diff.abs();
                     best_select = select;
                     best_split = split;
                 }
                 
-                if selected.len() > target_count {
+                // SPTAG logic: higher threshold = more selective = fewer heads
+                if diff > 0.0 {
+                    // Too many heads, increase threshold (more selective)
                     l = (l + r) / 2;
                 } else {
+                    // Too few heads, decrease threshold (less selective)
                     r = (l + r) / 2;
                 }
             }
         }
         
-        println!("    Tuned thresholds: select={}, split={}, diff={:.2}%", 
-                 best_select, best_split, min_diff * 100.0);
+        println!("    Tuned thresholds: select={}, split={}, target={:.2}%, diff={:.2}%", 
+                 best_select, best_split, target_ratio * 100.0, min_diff * 100.0);
         
         (best_select, best_split)
     }

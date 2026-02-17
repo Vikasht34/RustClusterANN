@@ -218,9 +218,14 @@ impl SPANNIndex {
         // Phase 1: Collect all assignments with distances
         let mut assignments: Vec<Vec<(usize, f32)>> = vec![Vec::new(); num_heads];
         
+        println!("  Using {} search for posting assignment", if self.skip_knng { "BK-Tree" } else { "KNNG" });
+        let progress_interval = if self.skip_knng { 1000 } else { 10000 };
+        
         for (vec_id, vec) in self.full_vectors.iter().enumerate() {
-            if vec_id % 10000 == 0 && vec_id > 0 {
-                println!("  Assigned {}/{} vectors", vec_id, self.full_vectors.len());
+            if vec_id % progress_interval == 0 && vec_id > 0 {
+                println!("  Assigned {}/{} vectors ({:.1}%)", 
+                         vec_id, self.full_vectors.len(),
+                         vec_id as f32 / self.full_vectors.len() as f32 * 100.0);
             }
             
             // Use BK-Tree only search if KNNG was skipped
