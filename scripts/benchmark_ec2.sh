@@ -23,6 +23,9 @@ DATASETS[gist]="gist 960 l2"
 DATASETS[glove]="glove 100 cosine"
 DATASETS[cohere]="cohere 768 cosine"
 DATASETS[sift]="sift 128 l2"
+DATASETS[mpnet]="mpnet-msmarco 768 cosine"
+DATASETS[snowflake]="snowflake-msmarco 768 cosine"
+DATASETS[tasb]="tasb-msmarco 768 cosine"
 
 # SPANN parameters
 NUM_HEADS=64

@@ -32,7 +32,7 @@ else
 fi
 
 # Create dataset directories
-for dataset in gist glove cohere sift; do
+for dataset in gist glove cohere sift mpnet-msmarco snowflake-msmarco tasb-msmarco; do
     mkdir -p /nvme/indexes/$dataset
     mkdir -p /data/results/$dataset
     echo "  ✓ Created directories for $dataset"
