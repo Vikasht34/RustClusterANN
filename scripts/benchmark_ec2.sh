@@ -7,12 +7,9 @@ set -e
 
 # Configuration
 DATA_DIR="${DATA_DIR:-/data}"
-INDEX_DIR="${INDEX_DIR:-/tmp/indices}"
-RESULTS_DIR="${RESULTS_DIR:-/tmp/results}"
+BASE_INDEX_DIR="${BASE_INDEX_DIR:-/nvme/indexes}"
+BASE_RESULTS_DIR="${BASE_RESULTS_DIR:-/data/results}"
 BINARY="./target/release/bench_cohere_ondemand"
-
-# Create directories
-mkdir -p "$INDEX_DIR" "$RESULTS_DIR"
 
 # Build if needed
 if [ ! -f "$BINARY" ]; then
@@ -20,10 +17,10 @@ if [ ! -f "$BINARY" ]; then
     cargo build --release --bin bench_cohere_ondemand
 fi
 
-# Dataset configurations
+# Dataset configurations (using .bin format)
 declare -A DATASETS
 DATASETS[gist]="gist 960 l2"
-DATASETS[glove]="glove-100 100 cosine"
+DATASETS[glove]="glove 100 cosine"
 DATASETS[cohere]="cohere 768 cosine"
 DATASETS[sift]="sift 128 l2"
 
@@ -37,8 +34,13 @@ run_benchmark() {
     read -r dataset_name dim metric <<< "$config"
     
     local data_path="$DATA_DIR/$dataset_name"
-    local index_path="$INDEX_DIR/${name}_spann.idx"
-    local log_file="$RESULTS_DIR/${name}_benchmark.log"
+    local index_dir="$BASE_INDEX_DIR/$dataset_name"
+    local results_dir="$BASE_RESULTS_DIR/$dataset_name"
+    local index_path="$index_dir/${name}_spann.idx"
+    local log_file="$results_dir/${name}_benchmark.log"
+    
+    # Create directories
+    mkdir -p "$index_dir" "$results_dir"
     
     echo "========================================="
     echo "Benchmarking: $name"
@@ -46,6 +48,10 @@ run_benchmark() {
     echo "Dimension: $dim"
     echo "Metric: $metric"
     echo "========================================="
+    echo "Data path: $data_path"
+    echo "Index dir: $index_dir"
+    echo "Results dir: $results_dir"
+    echo ""
     
     # Check if data exists (look for .bin files)
     if [ ! -f "$data_path/base.bin" ]; then
@@ -99,11 +105,19 @@ if [ $# -eq 0 ]; then
         echo "  - $dataset"
     done
     echo ""
+    echo "Configuration:"
+    echo "  DATA_DIR=$DATA_DIR"
+    echo "  BASE_INDEX_DIR=$BASE_INDEX_DIR"
+    echo "  BASE_RESULTS_DIR=$BASE_RESULTS_DIR"
+    echo ""
     echo "Examples:"
     echo "  $0 gist"
     echo "  $0 glove"
     echo "  $0 cohere"
     echo "  $0 sift"
+    echo ""
+    echo "Custom paths:"
+    echo "  BASE_INDEX_DIR=/nvme/indexes BASE_RESULTS_DIR=/data/results $0 cohere"
     echo ""
     echo "Run all:"
     echo "  for ds in gist glove cohere sift; do $0 \$ds; done"
