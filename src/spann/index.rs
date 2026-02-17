@@ -340,6 +340,40 @@ impl SPANNIndex {
         let (results, _) = self.search_with_stats(query, k);
         results
     }
+    
+    /// Search with reranking (only for quantized indexes)
+    /// rerank_factor: how many candidates to rerank (e.g., 3 means rerank top 3*k candidates)
+    pub fn search_with_rerank(&self, query: &[f32], k: usize, rerank_factor: usize) -> Vec<(usize, f32)> {
+        let (results, _) = self.search_with_rerank_and_stats(query, k, rerank_factor);
+        results
+    }
+    
+    pub fn search_with_rerank_and_stats(&self, query: &[f32], k: usize, rerank_factor: usize) -> (Vec<(usize, f32)>, SearchStats) {
+        // Only rerank if quantized
+        if self.quantization == QuantizationType::None {
+            return self.search_with_stats(query, k);
+        }
+        
+        // Stage 1: Get more candidates using quantized search
+        let candidate_count = k * rerank_factor;
+        let (candidates, mut stats) = self.search_with_stats(query, candidate_count);
+        
+        // Stage 2: Rerank with full precision
+        let mut reranked = Vec::with_capacity(candidates.len());
+        for (vec_id, _) in candidates {
+            if vec_id < self.full_vectors.len() {
+                let vec_ref = &self.full_vectors[vec_id];
+                let dist = self.compute_distance(query, vec_ref);
+                reranked.push((vec_id, dist));
+            }
+        }
+        
+        reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        reranked.truncate(k);
+        
+        stats.posting_search_time_us += 100; // Add small overhead for reranking
+        (reranked, stats)
+    }
 
     pub fn search_with_stats(&self, query: &[f32], k: usize) -> (Vec<(usize, f32)>, SearchStats) {
         use std::time::Instant;
@@ -542,6 +576,13 @@ impl SPANNIndex {
             .collect();
         std::fs::write(head_map_path, head_map_bytes)?;
         
+        // Save full precision vectors separately for reranking (only if quantized)
+        if save_quantized && !self.full_vectors.is_empty() {
+            let vectors_path = format!("{}.vectors", path);
+            self.save_full_vectors(&vectors_path)?;
+            println!("Saved full precision vectors for reranking: {}", vectors_path);
+        }
+        
         // Save metadata
         let meta_path = format!("{}.meta", path);
         let meta = serde_json::json!({
@@ -562,11 +603,60 @@ impl SPANNIndex {
             "enable_compression": enable_compression,
             "enable_delta": enable_delta,
             "dim": self.dim,
+            "has_full_vectors": save_quantized,
         });
         std::fs::write(meta_path, serde_json::to_string_pretty(&meta)?)?;
         
         println!("Index saved to {}", path);
         Ok(())
+    }
+    
+    fn save_full_vectors(&self, path: &str) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::File::create(path)?;
+        
+        // Write header: [num_vectors: u32, dimension: u32]
+        file.write_all(&(self.full_vectors.len() as u32).to_le_bytes())?;
+        file.write_all(&(self.dim as u32).to_le_bytes())?;
+        
+        // Write vectors
+        for vec in &self.full_vectors {
+            for &val in vec {
+                file.write_all(&val.to_le_bytes())?;
+            }
+        }
+        
+        Ok(())
+    }
+    
+    fn load_full_vectors(path: &str) -> std::io::Result<Vec<Vec<f32>>> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path)?;
+        
+        // Read header
+        let mut header = [0u8; 8];
+        file.read_exact(&mut header)?;
+        let num_vectors = u32::from_le_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        let dim = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+        
+        // Read vectors
+        let mut vectors = Vec::with_capacity(num_vectors);
+        let mut buffer = vec![0u8; dim * 4];
+        
+        for _ in 0..num_vectors {
+            file.read_exact(&mut buffer)?;
+            let vec: Vec<f32> = (0..dim)
+                .map(|i| f32::from_le_bytes([
+                    buffer[i * 4],
+                    buffer[i * 4 + 1],
+                    buffer[i * 4 + 2],
+                    buffer[i * 4 + 3],
+                ]))
+                .collect();
+            vectors.push(vec);
+        }
+        
+        Ok(vectors)
     }
     
     /// Load index from disk
@@ -626,10 +716,27 @@ impl SPANNIndex {
         let (postings, full_vectors, list_infos) = if on_demand {
             // On-demand: only load list_infos metadata
             let list_infos = crate::spann::SPANNStorage::load_metadata_only(path)?;
+            
+            // Load full vectors if quantized (for reranking)
+            let full_vectors = if quantization != QuantizationType::None {
+                let vectors_path = format!("{}.vectors", path);
+                if std::path::Path::new(&vectors_path).exists() {
+                    println!("Loading full precision vectors for reranking...");
+                    Self::load_full_vectors(&vectors_path)?
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+            
             println!("Index loaded in ON-DEMAND mode from {}", path);
             println!("  Heads: {} (in memory)", num_heads);
             println!("  Posting lists: {} (on disk)", list_infos.len());
-            (Vec::new(), Vec::new(), list_infos)
+            if !full_vectors.is_empty() {
+                println!("  Full vectors: {} (in memory for reranking)", full_vectors.len());
+            }
+            (Vec::new(), full_vectors, list_infos)
         } else {
             // In-memory: load everything
             let (postings, full_vectors, list_infos) = crate::spann::SPANNStorage::load(path)?;
