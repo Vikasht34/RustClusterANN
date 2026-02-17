@@ -379,7 +379,10 @@ impl SPANNIndex {
                     if results.len() >= self.max_check {
                         break 'outer;
                     }
-                    if i < distances.len() && !deduper.check_and_set(vec_id) {
+                    if i < distances.len() {
+                        if deduper.check_and_set(vec_id) {
+                            continue; // Skip duplicates
+                        }
                         results.push((vec_id, distances[i]));
                     }
                 }
@@ -389,7 +392,10 @@ impl SPANNIndex {
                     if results.len() >= self.max_check {
                         break 'outer;
                     }
-                    if vec_id < self.full_vectors.len() && !deduper.check_and_set(vec_id) {
+                    if deduper.check_and_set(vec_id) {
+                        continue; // Skip duplicates
+                    }
+                    if vec_id < self.full_vectors.len() {
                         let vec_ref = &self.full_vectors[vec_id];
                         stats.bytes_read += vec_ref.len() * 4; // f32 vectors
                         let dist = self.compute_distance(query, vec_ref);
@@ -529,6 +535,13 @@ impl SPANNIndex {
         let head_path = format!("{}.head_index", path);
         self.head_index.save(&head_path)?;
         
+        // Save head_id_map separately for fast on-demand loading
+        let head_map_path = format!("{}.head_map", path);
+        let head_map_bytes: Vec<u8> = self.head_id_map.iter()
+            .flat_map(|&id| (id as u32).to_le_bytes())
+            .collect();
+        std::fs::write(head_map_path, head_map_bytes)?;
+        
         // Save metadata
         let meta_path = format!("{}.meta", path);
         let meta = serde_json::json!({
@@ -566,8 +579,6 @@ impl SPANNIndex {
     /// on_demand=false: Load everything into memory (default)
     /// on_demand=true: Only load head index, posting lists + vectors loaded per query
     pub fn load_with_mode(path: &str, on_demand: bool) -> std::io::Result<Self> {
-        let (postings, full_vectors, list_infos) = crate::spann::SPANNStorage::load(path)?;
-        
         // Load metadata
         let meta_path = format!("{}.meta", path);
         let meta_str = std::fs::read_to_string(meta_path)?;
@@ -586,15 +597,23 @@ impl SPANNIndex {
             _ => QuantizationType::None,
         };
         
-        // Load head index (BKT structure) directly
+        // Load head index (BKT structure)
         let head_path = format!("{}.head_index", path);
         let head_index = SPTAGBKTIndex::load(&head_path)?;
         
-        // Extract head_id_map from postings
-        let mut head_id_map = Vec::new();
-        for posting in &postings {
-            head_id_map.push(posting.head_id);
-        }
+        // Load head_id_map
+        let head_map_path = format!("{}.head_map", path);
+        let head_id_map = if std::path::Path::new(&head_map_path).exists() {
+            // New format: separate head_map file
+            let bytes = std::fs::read(head_map_path)?;
+            bytes.chunks_exact(4)
+                .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize)
+                .collect()
+        } else {
+            // Old format: extract from postings (fallback)
+            let (postings, _, _) = crate::spann::SPANNStorage::load(path)?;
+            postings.iter().map(|p| p.head_id).collect()
+        };
         
         let num_heads = head_index.len();
         let dim = meta["dim"].as_u64().unwrap_or(if num_heads > 0 { head_index.get_data()[0].len() as u64 } else { 0 }) as usize;
@@ -603,19 +622,22 @@ impl SPANNIndex {
         
         println!("Loaded head index with {} vectors", num_heads);
         
-        // In on-demand mode, clear posting lists and vectors to save memory
-        let (postings, full_vectors) = if on_demand {
+        // Load data based on mode
+        let (postings, full_vectors, list_infos) = if on_demand {
+            // On-demand: only load list_infos metadata
+            let list_infos = crate::spann::SPANNStorage::load_metadata_only(path)?;
             println!("Index loaded in ON-DEMAND mode from {}", path);
             println!("  Heads: {} (in memory)", num_heads);
             println!("  Posting lists: {} (on disk)", list_infos.len());
-            println!("  Vectors: {} (on disk)", full_vectors.len());
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), list_infos)
         } else {
+            // In-memory: load everything
+            let (postings, full_vectors, list_infos) = crate::spann::SPANNStorage::load(path)?;
             println!("Index loaded in IN-MEMORY mode from {}", path);
             println!("  Vectors: {}", full_vectors.len());
             println!("  Heads: {}", num_heads);
             println!("  Postings: {}", postings.len());
-            (postings, full_vectors)
+            (postings, full_vectors, list_infos)
         };
         
         Ok(Self {

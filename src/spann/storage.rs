@@ -158,6 +158,52 @@ impl SPANNStorage {
     }
 
     /// Load index from disk
+    pub fn load_metadata_only(path: &str) -> io::Result<Vec<ListInfo>> {
+        let mut file = File::open(path)?;
+        
+        // Read header
+        let mut num_postings_bytes = [0u8; 8];
+        file.read_exact(&mut num_postings_bytes)?;
+        let num_postings = u64::from_le_bytes(num_postings_bytes) as usize;
+        
+        // Skip dim and flags (not needed)
+        file.seek(SeekFrom::Current(7))?;
+        
+        // Read list infos only
+        let mut list_infos = Vec::with_capacity(num_postings);
+        for _ in 0..num_postings {
+            let mut offset_bytes = [0u8; 8];
+            file.read_exact(&mut offset_bytes)?;
+            let offset = u64::from_le_bytes(offset_bytes);
+            
+            let mut page_count_bytes = [0u8; 2];
+            file.read_exact(&mut page_count_bytes)?;
+            let page_count = u16::from_le_bytes(page_count_bytes);
+            
+            let mut ele_count_bytes = [0u8; 2];
+            file.read_exact(&mut ele_count_bytes)?;
+            let ele_count = u16::from_le_bytes(ele_count_bytes);
+            
+            let mut total_bytes_bytes = [0u8; 4];
+            file.read_exact(&mut total_bytes_bytes)?;
+            let total_bytes = u32::from_le_bytes(total_bytes_bytes);
+            
+            let mut page_offset_bytes = [0u8; 4];
+            file.read_exact(&mut page_offset_bytes)?;
+            let page_offset = u32::from_le_bytes(page_offset_bytes);
+            
+            list_infos.push(ListInfo {
+                offset,
+                page_count,
+                ele_count,
+                total_bytes,
+                page_offset,
+            });
+        }
+        
+        Ok(list_infos)
+    }
+
     pub fn load(path: &str) -> io::Result<(Vec<crate::spann::PostingList>, Vec<Vec<f32>>, Vec<ListInfo>)> {
         let mut file = File::open(path)?;
         
