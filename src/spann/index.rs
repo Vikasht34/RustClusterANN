@@ -691,27 +691,23 @@ impl SPANNIndex {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path)?;
         
-        // Skip header (8 bytes)
-        file.seek(SeekFrom::Start(8))?;
+        // Sort IDs to read in sequential order (better for disk I/O)
+        let mut sorted_indices: Vec<(usize, usize)> = ids.iter().enumerate().map(|(i, &id)| (i, id)).collect();
+        sorted_indices.sort_by_key(|(_, id)| *id);
         
-        let mut vectors = Vec::with_capacity(ids.len());
+        let mut vectors = vec![Vec::new(); ids.len()];
         let mut buffer = vec![0u8; dim * 4];
         
-        for &id in ids {
+        for (original_idx, id) in sorted_indices {
             // Seek to vector position: header(8) + id * dim * 4
             let offset = 8 + (id * dim * 4) as u64;
             file.seek(SeekFrom::Start(offset))?;
             file.read_exact(&mut buffer)?;
             
-            let vec: Vec<f32> = (0..dim)
-                .map(|i| f32::from_le_bytes([
-                    buffer[i * 4],
-                    buffer[i * 4 + 1],
-                    buffer[i * 4 + 2],
-                    buffer[i * 4 + 3],
-                ]))
+            let vec: Vec<f32> = buffer.chunks_exact(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
                 .collect();
-            vectors.push(vec);
+            vectors[original_idx] = vec;
         }
         
         Ok(vectors)
