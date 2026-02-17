@@ -342,7 +342,6 @@ impl SPANNIndex {
     }
 
     pub fn search_with_stats(&self, query: &[f32], k: usize) -> (Vec<(usize, f32)>, SearchStats) {
-        use std::collections::HashSet;
         use std::time::Instant;
         
         let mut stats = SearchStats::default();
@@ -354,13 +353,14 @@ impl SPANNIndex {
         
         // Step 2 & 3: Collect candidates and compute distances
         let posting_start = Instant::now();
-        let mut results: Vec<(usize, f32)> = Vec::new();
+        let mut results: Vec<(usize, f32)> = Vec::with_capacity(self.max_check);
+        let mut deduper = crate::spann::FastDedup::new(self.max_check);
         let quant_metric = match self.metric {
             DistanceMetric::L2 => crate::multibit::MetricType::L2,
             DistanceMetric::InnerProduct => crate::multibit::MetricType::IP,
         };
         
-        for (head_idx, _) in head_results {
+        'outer: for (head_idx, _) in head_results {
             if head_idx >= self.postings.len() {
                 continue;
             }
@@ -376,14 +376,20 @@ impl SPANNIndex {
                 
                 let distances = quantizer.compute_distances(query, quant_metric);
                 for (i, &vec_id) in posting.vector_ids.iter().enumerate() {
-                    if i < distances.len() {
+                    if results.len() >= self.max_check {
+                        break 'outer;
+                    }
+                    if i < distances.len() && !deduper.check_and_set(vec_id) {
                         results.push((vec_id, distances[i]));
                     }
                 }
             } else {
                 // Full precision distance computation
                 for &vec_id in &posting.vector_ids {
-                    if vec_id < self.full_vectors.len() {
+                    if results.len() >= self.max_check {
+                        break 'outer;
+                    }
+                    if vec_id < self.full_vectors.len() && !deduper.check_and_set(vec_id) {
                         let vec_ref = &self.full_vectors[vec_id];
                         stats.bytes_read += vec_ref.len() * 4; // f32 vectors
                         let dist = self.compute_distance(query, vec_ref);
