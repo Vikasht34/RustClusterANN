@@ -1,6 +1,7 @@
 /// Recursive BK-Tree builder (SPTAG algorithm)
 use crate::index::BalancedKMeans;
 use crate::simd;
+use crate::dataset::Dataset;
 
 #[derive(Clone)]
 pub struct BKTNode {
@@ -34,24 +35,24 @@ impl BKTreeBuilder {
         }
     }
 
-    /// Build BK-Tree recursively (SPTAG algorithm)
-    pub fn build(&mut self, data: &[Vec<f32>]) -> Vec<(usize, usize)> {
-        println!("Building BK-Tree on {} vectors...", data.len());
+    /// Build BK-Tree recursively (SPTAG algorithm) - zero-copy with Dataset
+    pub fn build(&mut self, data: &Dataset) -> Vec<(usize, usize)> {
+        println!("Building BK-Tree on {} vectors...", data.rows());
         println!("  K={}, leaf_size={}, samples={}", self.k, self.leaf_size, self.samples);
         
         self.nodes.clear();
         self.leaves.clear();
-        self.indices = (0..data.len()).collect();
+        self.indices = (0..data.rows()).collect();
         
         // Select lambda once for entire tree
         if self.lambda < 0.0 {
             println!("  Selecting lambda factor...");
-            self.lambda = self.select_lambda(data, &self.indices.clone(), 0, data.len());
+            self.lambda = self.select_lambda(data, &self.indices.clone(), 0, data.rows());
             println!("  Selected lambda: {:.3}", self.lambda);
         }
         
         // Build tree recursively
-        self.build_recursive(data, 0, data.len(), 0);
+        self.build_recursive(data, 0, data.rows(), 0);
         
         println!("Built BK-Tree with {} nodes, {} leaves", self.nodes.len(), self.leaves.len());
         self.leaves.clone()
@@ -80,47 +81,18 @@ impl BKTreeBuilder {
         (center_id, children)
     }
 
-    fn select_lambda(&self, data: &[Vec<f32>], indices: &[usize], first: usize, last: usize) -> f32 {
-        use rand::seq::SliceRandom;
-        use rand::thread_rng;
-        
-        let mut rng = thread_rng();
+    fn select_lambda(&self, data: &Dataset, indices: &[usize], first: usize, last: usize) -> f32 {
+        // SPTAG default: lambdaFactor = 100.0 (no search)
+        // Only search if explicitly requested (we'll just use default for now)
         let sample_size = self.samples.min(last - first);
+        let lambda_factor = 100.0;
+        let lambda = 1.0 / lambda_factor / sample_size as f32;
         
-        // Sample from partition
-        let mut sample_indices: Vec<usize> = indices[first..last].to_vec();
-        sample_indices.shuffle(&mut rng);
-        sample_indices.truncate(sample_size);
-        
-        let sample_data: Vec<Vec<f32>> = sample_indices.iter()
-            .map(|&i| data[i].clone())
-            .collect();
-        
-        // Try lambda values
-        let mut best_lambda = 1.0;
-        let mut best_std = f32::MAX;
-        
-        for exp in -3..=3 {
-            let lambda = 10.0_f32.powi(exp);
-            let mut kmeans = BalancedKMeans::new(self.k, data[0].len());
-            kmeans.fit_with_lambda(&sample_data, lambda, 20);
-            
-            let avg = sample_data.len() as f32 / self.k as f32;
-            let variance: f32 = kmeans.counts.iter()
-                .map(|&c| (c as f32 - avg).powi(2))
-                .sum::<f32>() / self.k as f32;
-            let std_ratio = variance.sqrt() / avg;
-            
-            if std_ratio < best_std {
-                best_std = std_ratio;
-                best_lambda = lambda;
-            }
-        }
-        
-        best_lambda
+        println!("  Using lambda factor: {}, lambda: {:.6}", lambda_factor, lambda);
+        lambda
     }
 
-    fn build_recursive(&mut self, data: &[Vec<f32>], first: usize, last: usize, depth: usize) -> i32 {
+    fn build_recursive(&mut self, data: &Dataset, first: usize, last: usize, depth: usize) -> i32 {
         let size = last - first;
         
         // Create node
@@ -145,14 +117,17 @@ impl BKTreeBuilder {
             return node_idx;
         }
         
-        println!("  Depth {}: Clustering {} vectors into {} clusters", depth, size, self.k);
+        // SPTAG: Always use fixed K (dynamicK=false by default)
+        let effective_k = self.k;
         
-        // Cluster this partition
+        println!("  Depth {}: Clustering {} vectors into {} clusters", depth, size, effective_k);
+        
+        // Cluster this partition - use Dataset.at() to avoid cloning
         let partition_data: Vec<Vec<f32>> = self.indices[first..last].iter()
-            .map(|&i| data[i].clone())
+            .map(|&i| data.at(i).to_vec())
             .collect();
         
-        let mut kmeans = BalancedKMeans::new(self.k, data[0].len());
+        let mut kmeans = BalancedKMeans::new(effective_k, data.cols());
         
         // Use samples for training
         use rand::seq::SliceRandom;
@@ -171,15 +146,26 @@ impl BKTreeBuilder {
         // Train on samples
         kmeans.fit_with_lambda(&sample_data, self.lambda, 100);
         
-        // Assign ALL vectors in partition to clusters
+        // Check if clustering succeeded (at least 2 non-empty clusters)
+        let non_empty = kmeans.counts.iter().filter(|&&c| c > 0).count();
+        if non_empty <= 1 {
+            // K-means failed to split - treat as leaf
+            println!("  Depth {}: K-means failed (only {} non-empty clusters), creating leaf", depth, non_empty);
+            self.nodes[node_idx as usize].center_id = self.indices[first] as i32;
+            self.leaves.push((first, last));
+            return node_idx;
+        }
+        
+        // SPTAG: Assign ALL vectors WITHOUT lambda (pure nearest-center)
+        // Lambda was only used during training to get balanced centers
         let mut assignments = vec![0; partition_data.len()];
-        let mut counts = vec![0; self.k];
+        let mut counts = vec![0; effective_k];
         
         for (i, vec) in partition_data.iter().enumerate() {
             let mut best_cluster = 0;
             let mut best_dist = f32::MAX;
             
-            for j in 0..self.k {
+            for j in 0..effective_k {
                 let dist = simd::l2_distance(vec, &kmeans.centers[j]);
                 if dist < best_dist {
                     best_dist = dist;
@@ -193,7 +179,7 @@ impl BKTreeBuilder {
         
         // Reorder indices by cluster (SPTAG Shuffle)
         let mut reordered = Vec::with_capacity(partition_data.len());
-        for cluster in 0..self.k {
+        for cluster in 0..effective_k {
             for i in 0..partition_data.len() {
                 if assignments[i] == cluster {
                     reordered.push(self.indices[first + i]);
@@ -202,6 +188,11 @@ impl BKTreeBuilder {
         }
         self.indices[first..last].copy_from_slice(&reordered);
         
+        // Count non-empty clusters
+        let non_empty = counts.iter().filter(|&&c| c > 0).count();
+        println!("  Depth {}: Cluster sizes: {:?}, non-empty: {}/{}", 
+                 depth, counts, non_empty, effective_k);
+        
         // Set center as first vector of largest cluster
         let max_cluster = counts.iter().enumerate()
             .max_by_key(|(_, &c)| c)
@@ -209,17 +200,28 @@ impl BKTreeBuilder {
             .unwrap_or(0);
         self.nodes[node_idx as usize].center_id = self.indices[first] as i32;
         
-        // Recursively build children
+        // Recursively build children (SPTAG approach)
         self.nodes[node_idx as usize].child_start = self.nodes.len() as i32;
         
         let mut offset = first;
-        for cluster in 0..self.k {
+        for cluster in 0..effective_k {
             if counts[cluster] == 0 {
                 continue;
             }
             
+            // SPTAG: Take LAST vector in cluster as child node center
+            let child_center_id = self.indices[offset + counts[cluster] - 1] as i32;
+            self.nodes.push(BKTNode {
+                center_id: child_center_id,
+                child_start: -1,
+                child_end: -1,
+                data_start: offset,
+                data_end: offset + counts[cluster],
+            });
+            
+            // Recurse on FIRST (count - 1) vectors if count > 1
             if counts[cluster] > 1 {
-                self.build_recursive(data, offset, offset + counts[cluster], depth + 1);
+                self.build_recursive(data, offset, offset + counts[cluster] - 1, depth + 1);
             }
             
             offset += counts[cluster];

@@ -3,6 +3,7 @@ pub mod simd;
 pub mod index;
 pub mod spann;
 pub mod recall;
+pub mod dataset;
 
 use std::collections::BinaryHeap;
 use std::cmp::Ordering;

@@ -138,7 +138,7 @@ impl BalancedKMeans {
         variance.sqrt() / avg
     }
 
-    /// Fit with specific lambda factor
+    /// Fit with specific lambda factor (SPTAG algorithm)
     pub fn fit_with_lambda(&mut self, data: &[Vec<f32>], lambda: f32, max_iters: usize) -> f32 {
         let k = self.centers.len();
         let dim = data[0].len();
@@ -148,18 +148,36 @@ impl BalancedKMeans {
         
         self.assignments = vec![0; data.len()];
         self.counts = vec![0; k];
+        let mut new_counts = vec![0; k];
         
-        for iter in 0..max_iters {
-            // Assignment step with lambda penalty
+        // SPTAG: Do initial assignment WITHOUT lambda to get starting counts
+        for (i, vec) in data.iter().enumerate() {
+            let mut best_cluster = 0;
+            let mut best_dist = f32::MAX;
+            
+            for j in 0..k {
+                let dist = simd::l2_distance(vec, &self.centers[j]);
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_cluster = j;
+                }
+            }
+            
+            self.assignments[i] = best_cluster;
+            self.counts[best_cluster] += 1;
+        }
+        
+        for _iter in 0..max_iters {
+            // Assignment step with lambda penalty (using OLD counts)
             let mut changed = false;
-            self.counts.fill(0);
+            new_counts.fill(0);
             
             for (i, vec) in data.iter().enumerate() {
                 let mut best_cluster = 0;
                 let mut best_dist = f32::MAX;
                 
                 for j in 0..k {
-                    // Distance with lambda penalty for cluster size
+                    // Distance with lambda penalty using OLD counts (SPTAG approach)
                     let dist = simd::l2_distance(vec, &self.centers[j]) 
                              + lambda * self.counts[j] as f32;
                     
@@ -173,8 +191,11 @@ impl BalancedKMeans {
                     self.assignments[i] = best_cluster;
                     changed = true;
                 }
-                self.counts[best_cluster] += 1;
+                new_counts[best_cluster] += 1;
             }
+            
+            // Copy new counts to counts for next iteration
+            self.counts.copy_from_slice(&new_counts);
             
             if !changed {
                 break;
@@ -195,8 +216,32 @@ impl BalancedKMeans {
                     for d in 0..dim {
                         self.centers[j][d] = new_centers[j][d] / self.counts[j] as f32;
                     }
+                } else {
+                    // Empty cluster: reinitialize to a random point
+                    use rand::Rng;
+                    let mut rng = thread_rng();
+                    let random_idx = rng.gen_range(0..data.len());
+                    self.centers[j] = data[random_idx].clone();
                 }
             }
+        }
+        
+        // SPTAG: Final assignment WITHOUT lambda penalty
+        self.counts.fill(0);
+        for (i, vec) in data.iter().enumerate() {
+            let mut best_cluster = 0;
+            let mut best_dist = f32::MAX;
+            
+            for j in 0..k {
+                let dist = simd::l2_distance(vec, &self.centers[j]);  // No lambda!
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_cluster = j;
+                }
+            }
+            
+            self.assignments[i] = best_cluster;
+            self.counts[best_cluster] += 1;
         }
         
         // Return final objective

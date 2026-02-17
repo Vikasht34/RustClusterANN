@@ -1,6 +1,7 @@
 pub mod kdtree;
 pub mod bktree;
 pub mod bktree_recursive;
+pub mod tptree;
 pub mod rng;
 pub mod graph;
 pub mod sptag;
@@ -10,6 +11,7 @@ pub mod balanced_kmeans;
 pub use kdtree::KDTree;
 pub use bktree::BKTree;
 pub use bktree_recursive::BKTreeBuilder;
+pub use tptree::TPTree;
 pub use rng::RNGGraph;
 pub use graph::NeighborhoodGraph;
 pub use sptag::{SPTAGIndex, IndexType};

@@ -97,8 +97,11 @@ pub struct SPANNIndex {
 
 impl SPANNIndex {
     pub fn new() -> Self {
+        // SPTAG defaults: BKTNumber=1, BKTLeafSize=8, TPTNumber=32
+        let num_tpt_trees = 32;  // TP-Trees for KNNG construction
+        
         Self {
-            head_index: SPTAGBKTIndex::new(32, 2000, 32, 1.0, 500, 32),
+            head_index: SPTAGBKTIndex::new(32, 8, 32, 1.0, 500, num_tpt_trees),
             head_id_map: Vec::new(),
             postings: Vec::new(),
             full_vectors: Vec::new(),
