@@ -360,12 +360,40 @@ impl SPANNIndex {
         
         // Stage 2: Rerank with full precision
         let mut reranked = Vec::with_capacity(candidates.len());
-        for (vec_id, _) in candidates {
-            if vec_id < self.full_vectors.len() {
-                let vec_ref = &self.full_vectors[vec_id];
-                let dist = self.compute_distance(query, vec_ref);
-                reranked.push((vec_id, dist));
+        
+        if !self.full_vectors.is_empty() {
+            // In-memory: use loaded vectors
+            for (vec_id, _) in candidates {
+                if vec_id < self.full_vectors.len() {
+                    let vec_ref = &self.full_vectors[vec_id];
+                    let dist = self.compute_distance(query, vec_ref);
+                    reranked.push((vec_id, dist));
+                }
             }
+        } else if let Some(ref index_path) = self.index_path {
+            // On-demand: load only needed vectors
+            let vectors_path = format!("{}.vectors", index_path);
+            if std::path::Path::new(&vectors_path).exists() {
+                let ids: Vec<usize> = candidates.iter().map(|(id, _)| *id).collect();
+                match Self::load_vectors_by_ids(&vectors_path, &ids, self.dim) {
+                    Ok(vectors) => {
+                        for (i, (vec_id, _)) in candidates.iter().enumerate() {
+                            let dist = self.compute_distance(query, &vectors[i]);
+                            reranked.push((*vec_id, dist));
+                        }
+                    }
+                    Err(_) => {
+                        // Fallback: return quantized results
+                        return (candidates, stats);
+                    }
+                }
+            } else {
+                // No vectors file, return quantized results
+                return (candidates, stats);
+            }
+        } else {
+            // No vectors available, return quantized results
+            return (candidates, stats);
         }
         
         reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
@@ -659,6 +687,36 @@ impl SPANNIndex {
         Ok(vectors)
     }
     
+    fn load_vectors_by_ids(path: &str, ids: &[usize], dim: usize) -> std::io::Result<Vec<Vec<f32>>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(path)?;
+        
+        // Skip header (8 bytes)
+        file.seek(SeekFrom::Start(8))?;
+        
+        let mut vectors = Vec::with_capacity(ids.len());
+        let mut buffer = vec![0u8; dim * 4];
+        
+        for &id in ids {
+            // Seek to vector position: header(8) + id * dim * 4
+            let offset = 8 + (id * dim * 4) as u64;
+            file.seek(SeekFrom::Start(offset))?;
+            file.read_exact(&mut buffer)?;
+            
+            let vec: Vec<f32> = (0..dim)
+                .map(|i| f32::from_le_bytes([
+                    buffer[i * 4],
+                    buffer[i * 4 + 1],
+                    buffer[i * 4 + 2],
+                    buffer[i * 4 + 3],
+                ]))
+                .collect();
+            vectors.push(vec);
+        }
+        
+        Ok(vectors)
+    }
+    
     /// Load index from disk
     /// Load index in in-memory mode (default)
     pub fn load(path: &str) -> std::io::Result<Self> {
@@ -717,26 +775,16 @@ impl SPANNIndex {
             // On-demand: only load list_infos metadata
             let list_infos = crate::spann::SPANNStorage::load_metadata_only(path)?;
             
-            // Load full vectors if quantized (for reranking)
-            let full_vectors = if quantization != QuantizationType::None {
-                let vectors_path = format!("{}.vectors", path);
-                if std::path::Path::new(&vectors_path).exists() {
-                    println!("Loading full precision vectors for reranking...");
-                    Self::load_full_vectors(&vectors_path)?
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            };
-            
             println!("Index loaded in ON-DEMAND mode from {}", path);
             println!("  Heads: {} (in memory)", num_heads);
             println!("  Posting lists: {} (on disk)", list_infos.len());
-            if !full_vectors.is_empty() {
-                println!("  Full vectors: {} (in memory for reranking)", full_vectors.len());
+            if quantization != QuantizationType::None {
+                let vectors_path = format!("{}.vectors", path);
+                if std::path::Path::new(&vectors_path).exists() {
+                    println!("  Full vectors: available on disk for reranking");
+                }
             }
-            (Vec::new(), full_vectors, list_infos)
+            (Vec::new(), Vec::new(), list_infos)
         } else {
             // In-memory: load everything
             let (postings, full_vectors, list_infos) = crate::spann::SPANNStorage::load(path)?;
