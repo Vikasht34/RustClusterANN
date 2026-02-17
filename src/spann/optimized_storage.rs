@@ -14,10 +14,11 @@ pub struct OptimizedAsyncStorage {
     enable_compression: bool,
     enable_delta: bool,
     enable_direct_io: bool,
+    has_quantization: bool,
 }
 
 impl OptimizedAsyncStorage {
-    pub fn new(path: String, list_infos: Vec<ListInfo>, enable_compression: bool, enable_delta: bool) -> Self {
+    pub fn new(path: String, list_infos: Vec<ListInfo>, enable_compression: bool, enable_delta: bool, has_quantization: bool) -> Self {
         // Enable Direct I/O on Linux (offsets are now properly aligned)
         let enable_direct_io = cfg!(target_os = "linux");
         
@@ -27,11 +28,16 @@ impl OptimizedAsyncStorage {
             enable_compression,
             enable_delta,
             enable_direct_io,
+            has_quantization,
         }
     }
     
     pub fn is_delta_enabled(&self) -> bool {
         self.enable_delta
+    }
+    
+    pub fn has_quantization(&self) -> bool {
+        self.has_quantization
     }
 
     /// Open file with Direct I/O if available

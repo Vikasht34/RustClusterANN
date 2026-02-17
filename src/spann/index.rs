@@ -485,6 +485,58 @@ impl SPANNIndex {
         k: usize,
         storage: &crate::spann::OptimizedAsyncStorage,
     ) -> std::io::Result<Vec<(usize, f32)>> {
+        // If quantized, use reranking for better recall
+        if storage.has_quantization() {
+            return self.search_async_with_rerank(query, k, 3, storage).await;
+        }
+        
+        self.search_async_full_precision(query, k, storage).await
+    }
+    
+    /// On-demand search with reranking (for quantized indexes)
+    pub async fn search_async_with_rerank(
+        &self,
+        query: &[f32],
+        k: usize,
+        rerank_factor: usize,
+        storage: &crate::spann::OptimizedAsyncStorage,
+    ) -> std::io::Result<Vec<(usize, f32)>> {
+        // Stage 1: Get more candidates with quantized search
+        let candidate_count = k * rerank_factor;
+        let candidates = self.search_async_full_precision(query, candidate_count, storage).await?;
+        
+        // Stage 2: Rerank with full precision from .vectors file
+        if let Some(ref index_path) = self.index_path {
+            let vectors_path = format!("{}.vectors", index_path);
+            if std::path::Path::new(&vectors_path).exists() {
+                let ids: Vec<usize> = candidates.iter().map(|(id, _)| *id).collect();
+                match Self::load_vectors_by_ids(&vectors_path, &ids, self.dim) {
+                    Ok(vectors) => {
+                        let mut reranked = Vec::with_capacity(candidates.len());
+                        for (i, (vec_id, _)) in candidates.iter().enumerate() {
+                            let dist = self.compute_distance(query, &vectors[i]);
+                            reranked.push((*vec_id, dist));
+                        }
+                        reranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                        reranked.truncate(k);
+                        return Ok(reranked);
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        
+        // Fallback: return quantized results
+        Ok(candidates.into_iter().take(k).collect())
+    }
+    
+    /// On-demand search with full precision (internal)
+    async fn search_async_full_precision(
+        &self,
+        query: &[f32],
+        k: usize,
+        storage: &crate::spann::OptimizedAsyncStorage,
+    ) -> std::io::Result<Vec<(usize, f32)>> {
         // Step 1: Search head index (in RAM)
         let head_results = self.head_index.search(query, self.num_heads_to_search, 500);
         let posting_ids: Vec<usize> = head_results.iter().map(|(idx, _)| *idx).collect();
@@ -819,11 +871,13 @@ impl SPANNIndex {
     /// Create optimized async storage for on-demand loading
     pub fn create_async_storage(&self) -> Option<crate::spann::OptimizedAsyncStorage> {
         if let Some(ref path) = self.index_path {
+            let has_quantization = self.quantization != QuantizationType::None;
             Some(crate::spann::OptimizedAsyncStorage::new(
                 path.clone(),
                 self.list_infos.clone(),
                 self.enable_compression,
                 self.enable_delta,
+                has_quantization,
             ))
         } else {
             None
