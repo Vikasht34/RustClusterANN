@@ -19,8 +19,8 @@ pub struct OptimizedAsyncStorage {
 
 impl OptimizedAsyncStorage {
     pub fn new(path: String, list_infos: Vec<ListInfo>, enable_compression: bool, enable_delta: bool, has_quantization: bool) -> Self {
-        // Enable Direct I/O on Linux (offsets are now properly aligned)
-        let enable_direct_io = cfg!(target_os = "linux");
+        // Disable Direct I/O when compression is enabled (compressed sizes are not aligned)
+        let enable_direct_io = cfg!(target_os = "linux") && !enable_compression;
         
         Self {
             path,
@@ -79,6 +79,15 @@ impl OptimizedAsyncStorage {
             
             // Seek to page-aligned offset
             let aligned_offset = info.offset;
+            let file_size = file.metadata()?.len();
+            
+            if aligned_offset >= file_size {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Offset {} >= file size {}", aligned_offset, file_size)
+                ));
+            }
+            
             file.seek(SeekFrom::Start(aligned_offset))?;
             
             // Read page-aligned data

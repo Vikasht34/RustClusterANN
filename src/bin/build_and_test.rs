@@ -69,7 +69,12 @@ fn main() {
     
     let mut index = SPANNIndex::new();
     index.set_metric(DistanceMetric::InnerProduct);
+    index.set_hbc_sample_size(Some(200_000));
     index.build(base);
+    
+    // Set search parameters to match working test
+    index.set_num_heads_to_search(128);
+    index.set_max_check(8192);
     println!("Built!\n");
     
     println!("Loading 100 queries...");
