@@ -1,6 +1,7 @@
 /// HBC (Hierarchical Balanced Clustering) head selection
 /// Matches SPTAG's SelectHeadDynamically algorithm
 use crate::index::bktree_recursive::BKTreeBuilder;
+use crate::dataset::Dataset;
 
 pub struct HBCSelector {
     select_threshold: usize,  // Min cluster size to select (default: 6)
@@ -54,13 +55,15 @@ impl HBCSelector {
             (0..n).collect()
         };
         
+        // Convert to Dataset for zero-copy tree building
         let sampled_vectors: Vec<Vec<f32>> = sampled_indices.iter()
             .map(|&i| vectors[i].clone())
             .collect();
+        let sampled_dataset = crate::dataset::Dataset::from_vectors(&sampled_vectors);
         
         // Build BKT tree on sampled vectors
         let mut tree = BKTreeBuilder::new(32, 8, 1000);
-        let _leaves = tree.build(&sampled_vectors);
+        let _leaves = tree.build(&sampled_dataset);
         
         // Tune thresholds to hit target ratio
         let (select_thresh, split_thresh) = self.tune_thresholds(
